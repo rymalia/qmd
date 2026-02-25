@@ -146,6 +146,30 @@ bun test --preload ./src/test-preload.ts test/
 - Write out example commands for the user to run manually
 - Index is stored at `~/.cache/qmd/index.sqlite`
 
+## MCP Server (HTTP mode)
+
+The MCP server runs as a shared HTTP daemon on port **8181**, started automatically at login via macOS LaunchAgent (`~/Library/LaunchAgents/com.qmd.mcp.plist`).
+
+```sh
+# Manual control
+qmd mcp --http                # foreground (Ctrl-C to stop)
+qmd mcp --http --daemon       # background, writes PID to ~/.cache/qmd/mcp.pid
+qmd mcp stop                  # stop background daemon
+
+# LaunchAgent control (use bootstrap/bootout, NOT load/unload)
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.qmd.mcp.plist  # start
+launchctl bootout gui/$(id -u)/com.qmd.mcp                                 # stop
+curl http://localhost:8181/health                                           # check status
+```
+
+- **Endpoint**: `POST http://localhost:8181/mcp` (Streamable HTTP, stateless)
+- **Health check**: `GET http://localhost:8181/health`
+- **Logs**: `/tmp/qmd-mcp.log` and `/tmp/qmd-mcp.error.log`
+- **Binary**: `~/.nvm/versions/node/v24.12.0/bin/qmd` (update path if nvm node version changes)
+- Claude Code connects via HTTP through `~/.claude/.mcp.json` (not the plugin marketplace.json, which only supports stdio)
+- LLM models stay loaded in VRAM and are shared across all connected agents
+- Embedding/reranking contexts auto-dispose after 5 min idle, recreate on next request (~1s)
+
 ## Do NOT compile
 
 - Never run `bun build --compile` - it overwrites the shell wrapper and breaks sqlite-vec
