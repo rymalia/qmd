@@ -12,6 +12,8 @@ A reference for understanding how Node.js, nvm, npm, pnpm, and Bun relate to eac
 | **nvm** | Node *version* manager — switches between Node versions | Like pyenv |
 | **pnpm** | Alternative package manager (content-addressable storage, strict) | Like npm but with deduplication |
 | **Bun** | Independent runtime + package manager + bundler in one | Like if Python and pip were a single fast binary |
+| **esbuild** | Go-based JS/TS bundler and transpiler — extremely fast, no type-checking | Like Babel but written in Go |
+| **tsx** | TypeScript executor — wraps esbuild to run `.ts` files directly, no compile step | Like `python file.py` but for TypeScript |
 
 ## How They Relate
 
@@ -45,17 +47,106 @@ create-react-app my-app
 npx create-react-app my-app
 ```
 
-It's also useful for running a specific version of a tool, or running a project's local copy of a binary (from `node_modules/.bin/`) without typing the full path:
+### Resolution order
+
+When you run `npx foo`, it looks for `foo` in this order:
+1. **`node_modules/.bin/`** in the current project — project-local installs win
+2. **npm global bin** — packages installed with `npm install -g`
+3. **npm registry** — downloads the package temporarily if not found locally
 
 ```sh
 # Runs the project-local vitest, not a global one
 npx vitest run
 
-# Runs a specific version temporarily
+# Runs a specific version temporarily (downloads if not cached)
 npx node-gyp@10 rebuild
+
+# Force download even if a local version exists
+npx --yes cowsay "hello"
 ```
 
-**Important caveat:** `npx` resolves `node` through your shell's PATH. If nvm is active, `npx` uses nvm's Node — even if you're trying to build something for a different Node installation. This can cause [native module ABI mismatches](#native-addons-and-abi-compatibility).
+### npx and PATH
+
+`npx` resolves `node` through your shell's PATH — it does not use its own isolated runtime. This means:
+
+- If nvm is active, `npx foo` uses nvm's Node to run `foo` — even if you invoked a different npm to run npx
+- `npx node-gyp rebuild` will compile native addons against whichever `node` is first on PATH — which may not be the Node that will actually run the code
+
+This can cause [native module ABI mismatches](#native-addons-and-abi-compatibility) that are hard to diagnose. Override PATH explicitly when it matters:
+
+```sh
+PATH="/opt/homebrew/bin:$PATH" npx node-gyp rebuild
+```
+
+## What is esbuild?
+
+esbuild is a JavaScript and TypeScript **bundler and transpiler** written in Go. It is extremely fast — 10–100× faster than the TypeScript compiler (`tsc`) for the same transformation.
+
+```sh
+# Transpile TypeScript to JavaScript
+npx esbuild src/server.ts --bundle --outfile=dist/server.js
+
+# Or just transform a file in place (no bundling)
+npx esbuild src/util.ts --loader=ts
+```
+
+**What esbuild does not do:** esbuild performs no type checking. It treats TypeScript purely as "JavaScript with type annotations to be erased." If your types are wrong, esbuild happily runs your code anyway. This is by design — type checking and fast builds are separate concerns.
+
+```
+tsc --noEmit    ← type checking only, no output (slow, correct)
+esbuild         ← transpile only, no type checking (fast, not correct-aware)
+```
+
+The right workflow is to run both: esbuild for fast dev/build cycles, `tsc --noEmit` in CI or pre-commit to catch type errors.
+
+**Bun uses esbuild internally.** When you run `bun src/file.ts`, Bun transpiles the TypeScript through esbuild before executing it. This is why Bun starts TypeScript files so quickly.
+
+## What is tsx?
+
+`tsx` (TypeScript eXecute) wraps esbuild to let you run `.ts` files directly under Node.js, with no build step:
+
+```sh
+npx tsx src/server.ts           # run a TypeScript file
+npx tsx src/server.ts --port 8080  # args pass through to the script
+```
+
+### tsx vs ts-node
+
+`ts-node` is the older alternative — it runs TypeScript under Node but uses the actual TypeScript compiler, which means full type-checking on every run. This is slower and will refuse to run files with type errors.
+
+| | tsx | ts-node |
+|-|-----|---------|
+| Transpiler | esbuild (Go) | tsc (TypeScript) |
+| Startup time | ~50ms | ~500ms–2s |
+| Type checks? | No | Yes (by default) |
+| Handles type errors | Runs anyway | Fails to start |
+
+### tsx vs bun
+
+Both run TypeScript directly without a separate compile step. The difference is the **runtime**:
+
+```sh
+npx tsx src/file.ts   # esbuild transpilation → runs under Node.js
+bun src/file.ts       # esbuild transpilation → runs under Bun runtime
+```
+
+If your project is Bun-native (has a `bun.lock`, uses Bun APIs), use `bun`. If your project targets Node.js and you just want fast TypeScript execution, use `tsx`.
+
+### tsx as a build workaround
+
+When a project's TypeScript compilation is broken — due to type errors, mismatched dependency versions, or type-incompatible libraries — `tsx` can run source files directly because it skips type checking entirely.
+
+This came up with QMD when the `tsc` build failed due to a Zod v3/v4 type mismatch with `@modelcontextprotocol/sdk`. The TypeScript types were incompatible, causing ~12 `tsc` errors. But the *runtime behavior* was correct — the code ran fine, the types just didn't satisfy the compiler. `npx tsx` let us run from source while the type issue was deferred:
+
+```sh
+# tsc build broken — Zod type mismatch blocks compilation
+bun run build   # ← fails with 12 type errors
+
+# tsx runs source directly, bypassing the type checker
+npx tsx src/qmd.ts mcp --http   # ← works fine at runtime
+```
+
+**Important caveat:** This is a workaround, not a fix. `tsx` silently ignores the type errors that `tsc` flags. Use it to keep running while you fix the underlying issue — not as a permanent solution.
 
 ## The nvm Fragility Problem
 
