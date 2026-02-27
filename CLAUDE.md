@@ -148,24 +148,68 @@ bun test --preload ./src/test-preload.ts test/
 
 ## MCP Server (HTTP mode)
 
-The MCP server runs as a shared HTTP daemon on port **8181**, started automatically at login via macOS LaunchAgent (`~/Library/LaunchAgents/com.qmd.mcp.plist`).
+The MCP server runs as a shared HTTP daemon on port **8181**. Two mutually exclusive run modes:
+
+### Daemon mode (`--daemon` flag)
 
 ```sh
-# Manual control
-qmd mcp --http                # foreground (Ctrl-C to stop)
-qmd mcp --http --daemon       # background, writes PID to ~/.cache/qmd/mcp.pid
-qmd mcp stop                  # stop background daemon
-
-# LaunchAgent control (use bootstrap/bootout, NOT load/unload)
-launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.qmd.mcp.plist  # start
-launchctl bootout gui/$(id -u)/com.qmd.mcp                                 # stop
-curl http://localhost:8181/health                                           # check status
+qmd mcp --http --daemon       # start, writes PID to ~/.cache/qmd/mcp.pid
+qmd mcp stop                  # stop via PID file (SIGTERM)
+qmd mcp stop && qmd mcp --http --daemon   # restart
 ```
 
-- **Endpoint**: `POST http://localhost:8181/mcp` (Streamable HTTP, stateless)
-- **Health check**: `GET http://localhost:8181/health`
+- **PID file**: `~/.cache/qmd/mcp.pid`
+- **Logs**: `~/.cache/qmd/mcp.log`
+- `qmd mcp stop` sends SIGTERM and deletes the PID file
+
+### LaunchAgent mode (macOS)
+
+Managed by `~/Library/LaunchAgents/com.qmd.mcp.plist`. Auto-starts at login, auto-restarts on crash (`KeepAlive: true`).
+
+```sh
+# Use bootstrap/bootout, NOT load/unload
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.qmd.mcp.plist  # start
+launchctl bootout gui/$(id -u)/com.qmd.mcp                                 # stop
+
+# Restart
+launchctl bootout gui/$(id -u)/com.qmd.mcp
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.qmd.mcp.plist
+```
+
+- **No PID file** — `qmd mcp stop` will not work; always use `launchctl bootout`
 - **Logs**: `/tmp/qmd-mcp.log` and `/tmp/qmd-mcp.error.log`
 - **Binary**: `~/.nvm/versions/node/v24.12.0/bin/qmd` (update path if nvm node version changes)
+
+### Health check & status
+
+```sh
+curl http://localhost:8181/health    # {"status":"ok","uptime":<seconds>}
+qmd status                          # shows "MCP: running (PID ...)"
+```
+
+### Killing orphaned processes
+
+If `qmd mcp stop` says "no PID file" but the port is occupied:
+
+```sh
+lsof -i :8181                       # find what owns the port
+lsof -ti :8181 | xargs kill         # kill it (graceful)
+lsof -ti :8181 | xargs kill -9      # force kill
+```
+
+If the server keeps restarting after `kill`, the LaunchAgent is re-spawning it — use `launchctl bootout` instead.
+
+### Session errors
+
+If an MCP client gets `404 "Session not found"` or `"Session expired"`, the server restarted and the client has a stale session ID. **Reconnect the client, not the server** — the server is healthy. In Claude Code, run `/mcp` to reconnect.
+
+The REST endpoints (`/query`, `/search`, `/health`) are stateless and unaffected by session issues.
+
+### Reference
+
+- **MCP endpoint**: `POST http://localhost:8181/mcp` (Streamable HTTP, stateful sessions)
+- **REST endpoint**: `POST http://localhost:8181/query` (stateless, no MCP envelope)
+- **Health check**: `GET http://localhost:8181/health`
 - Claude Code connects via HTTP through `~/.claude/.mcp.json` (not the plugin marketplace.json, which only supports stdio)
 - LLM models stay loaded in VRAM and are shared across all connected agents
 - Embedding/reranking contexts auto-dispose after 5 min idle, recreate on next request (~1s)

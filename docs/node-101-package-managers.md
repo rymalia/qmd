@@ -385,3 +385,11 @@ Real-world lessons from migrating the QMD MCP HTTP daemon from nvm to Homebrew.
 - **Don't fight the ABI — match it.** Instead of forcing compilation against different headers, it's often simpler to use the same Node version the prebuilt binaries target (Node 24 LTS).
 - **The simplest solution was the starting point.** The nvm path in the LaunchAgent worked from the start. The migration to Homebrew introduced complexity that didn't exist before. Sometimes "fragile but working" beats "elegant but broken."
 - **Use `launchctl bootstrap/bootout`, not `load/unload`.** The deprecated API left ghost state after the crash loop, making the service appear to silently refuse to load. `bootout` cleared the stale label and `bootstrap` loaded it cleanly.
+
+## Can I Use Bun Instead of npm to Install Anything?
+
+Yes — bun and npm both pull from the **same npm registry** (`registry.npmjs.org`). Any package published there is available to either tool. There's no such thing as a "bun-only" or "npm-only" package. The differences are in *how* they install (lockfile format, global bin path, speed), not *what* they can install.
+
+The one practical caveat is **native addons** (C/C++ compiled packages like `better-sqlite3`, `sharp`, `node-gyp`-based things). These *can* be installed with `bun install`, but occasionally hit edge cases because bun's native addon compilation pipeline isn't as battle-tested as npm's. Any pure JavaScript/TypeScript package is fully interchangeable. For packages with native addons, npm (especially Homebrew's npm) is the safer bet for global installs, while bun works fine for local project installs in most cases.
+
+The npm registry is a protocol, not a product — it's just an HTTP API that serves tarballs. Any tool that speaks the registry protocol can install from it. That's why npm, bun, pnpm, and yarn all access the same packages. The "parallel dimensions" problem [above](#package-managers-are-parallel-dimensions) isn't about *availability* — it's about each tool maintaining its own separate record of what's installed where.
