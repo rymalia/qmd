@@ -552,12 +552,15 @@ export type HttpServerHandle = {
  */
 export async function startMcpHttpServer(port: number, options?: { quiet?: boolean }): Promise<HttpServerHandle> {
   const store = createStore();
-  const mcpServer = createMcpServer(store);
-  const transport = new WebStandardStreamableHTTPServerTransport({
-    sessionIdGenerator: () => randomUUID(),
-    enableJsonResponse: true,
-  });
-  await mcpServer.connect(transport);
+  // Per-client session management: each MCP client gets its own McpServer + transport
+  // pair so multiple clients (Claude Code, Gemini CLI, etc.) can connect concurrently.
+  type Session = {
+    server: McpServer;
+    transport: WebStandardStreamableHTTPServerTransport;
+    lastAccess: number;
+  };
+  const sessions = new Map<string, Session>();
+  const SESSION_IDLE_TIMEOUT = 5 * 60_000; // 5 minutes
 
   const startTime = Date.now();
   const quiet = options?.quiet ?? false;
@@ -595,6 +598,18 @@ export async function startMcpHttpServer(port: number, options?: { quiet?: boole
     for await (const chunk of req) chunks.push(chunk as Buffer);
     return Buffer.concat(chunks).toString();
   }
+
+  // Periodically clean up idle sessions
+  const sessionCleanup = setInterval(() => {
+    const now = Date.now();
+    for (const [id, s] of sessions) {
+      if (now - s.lastAccess > SESSION_IDLE_TIMEOUT) {
+        s.transport.close().catch(() => {});
+        sessions.delete(id);
+        log(`${ts()} Session ${id.slice(0, 8)}… expired`);
+      }
+    }
+  }, 60_000);
 
   const httpServer = createServer(async (nodeReq: IncomingMessage, nodeRes: ServerResponse) => {
     const reqStart = Date.now();
@@ -664,13 +679,45 @@ export async function startMcpHttpServer(port: number, options?: { quiet?: boole
         const rawBody = await collectBody(nodeReq);
         const body = JSON.parse(rawBody);
         const label = describeRequest(body);
+
+        // Route to existing session or create a new one
+        const reqSessionId = nodeReq.headers['mcp-session-id'] as string | undefined;
+        let session = reqSessionId ? sessions.get(reqSessionId) : undefined;
+
+        if (!session && reqSessionId) {
+          // Client sent a session ID we don't recognise (expired/stale)
+          nodeRes.writeHead(400, { "Content-Type": "application/json" });
+          nodeRes.end(JSON.stringify({
+            jsonrpc: "2.0",
+            error: { code: -32600, message: "Session expired. Please re-initialize." },
+            id: body.id ?? null,
+          }));
+          log(`${ts()} POST /mcp rejected: unknown session ${reqSessionId.slice(0, 8)}…`);
+          return;
+        }
+
+        if (!session) {
+          // New client — create a dedicated McpServer + transport
+          const sessionId = randomUUID();
+          const sessionTransport = new WebStandardStreamableHTTPServerTransport({
+            sessionIdGenerator: () => sessionId,
+            enableJsonResponse: true,
+          });
+          const sessionServer = createMcpServer(store);
+          await sessionServer.connect(sessionTransport);
+          session = { server: sessionServer, transport: sessionTransport, lastAccess: Date.now() };
+          sessions.set(sessionId, session);
+          log(`${ts()} New MCP session ${sessionId.slice(0, 8)}…`);
+        }
+
+        session.lastAccess = Date.now();
         const url = `http://localhost:${port}${pathname}`;
         const headers: Record<string, string> = {};
         for (const [k, v] of Object.entries(nodeReq.headers)) {
           if (typeof v === "string") headers[k] = v;
         }
         const request = new Request(url, { method: "POST", headers, body: rawBody });
-        const response = await transport.handleRequest(request, { parsedBody: body });
+        const response = await session.transport.handleRequest(request, { parsedBody: body });
         nodeRes.writeHead(response.status, Object.fromEntries(response.headers));
         nodeRes.end(Buffer.from(await response.arrayBuffer()));
         log(`${ts()} POST /mcp ${label} (${Date.now() - reqStart}ms)`);
@@ -678,6 +725,16 @@ export async function startMcpHttpServer(port: number, options?: { quiet?: boole
       }
 
       if (pathname === "/mcp") {
+        const reqSessionId = nodeReq.headers['mcp-session-id'] as string | undefined;
+        const session = reqSessionId ? sessions.get(reqSessionId) : undefined;
+
+        if (!session) {
+          nodeRes.writeHead(400, { "Content-Type": "application/json" });
+          nodeRes.end(JSON.stringify({ error: "Session not found" }));
+          return;
+        }
+
+        session.lastAccess = Date.now();
         const url = `http://localhost:${port}${pathname}`;
         const headers: Record<string, string> = {};
         for (const [k, v] of Object.entries(nodeReq.headers)) {
@@ -685,7 +742,15 @@ export async function startMcpHttpServer(port: number, options?: { quiet?: boole
         }
         const rawBody = nodeReq.method !== "GET" && nodeReq.method !== "HEAD" ? await collectBody(nodeReq) : undefined;
         const request = new Request(url, { method: nodeReq.method || "GET", headers, ...(rawBody ? { body: rawBody } : {}) });
-        const response = await transport.handleRequest(request);
+        const response = await session.transport.handleRequest(request);
+
+        // Clean up on DELETE (session termination)
+        if (nodeReq.method === "DELETE" && reqSessionId) {
+          await session.transport.close().catch(() => {});
+          sessions.delete(reqSessionId);
+          log(`${ts()} Session ${reqSessionId.slice(0, 8)}… terminated`);
+        }
+
         nodeRes.writeHead(response.status, Object.fromEntries(response.headers));
         nodeRes.end(Buffer.from(await response.arrayBuffer()));
         return;
@@ -711,7 +776,11 @@ export async function startMcpHttpServer(port: number, options?: { quiet?: boole
   const stop = async () => {
     if (stopping) return;
     stopping = true;
-    await transport.close();
+    clearInterval(sessionCleanup);
+    for (const [, s] of sessions) {
+      await s.transport.close().catch(() => {});
+    }
+    sessions.clear();
     httpServer.close();
     store.close();
     await disposeDefaultLlamaCpp();
