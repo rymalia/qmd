@@ -178,7 +178,7 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.qmd.mcp.plist
 
 - **No PID file** — `qmd mcp stop` will not work; always use `launchctl bootout`
 - **Logs**: `/tmp/qmd-mcp.log` and `/tmp/qmd-mcp.error.log`
-- **Binary**: `~/.nvm/versions/node/v24.12.0/bin/qmd` (update path if nvm node version changes)
+- **Binary**: `~/.bun/bin/qmd` (symlink to local project via `bun link`)
 
 ### Health check & status
 
@@ -213,6 +213,20 @@ The REST endpoints (`/query`, `/search`, `/health`) are stateless and unaffected
 - Claude Code connects via HTTP through `~/.claude/.mcp.json` (not the plugin marketplace.json, which only supports stdio)
 - LLM models stay loaded in VRAM and are shared across all connected agents
 - Embedding/reranking contexts auto-dispose after 5 min idle, recreate on next request (~1s)
+- Multiple MCP clients (Claude Code, Gemini CLI) can connect simultaneously via per-session architecture
+
+### Deploying source changes to the LaunchAgent
+
+After modifying `src/mcp.ts` or other source files, the LaunchAgent won't pick up changes until you rebuild and relink:
+
+```sh
+bun run build                    # compile src/ → dist/
+bun link                         # update ~/.bun/bin/qmd symlink
+launchctl bootout gui/$(id -u)/com.qmd.mcp
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.qmd.mcp.plist
+```
+
+**Common pitfall**: forgetting `bun link` after `bun run build`. The LaunchAgent runs `~/.bun/bin/qmd`, which is a symlink into `~/.bun/install/global/node_modules/@tobilu/qmd/dist/`. Without `bun link`, the global copy stays stale even though `dist/` is updated locally.
 
 ## Do NOT compile
 

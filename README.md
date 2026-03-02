@@ -247,7 +247,7 @@ lsof -ti :8181 | xargs kill -9
 ##### Graceful Shutdown Behavior
 
 When the server receives SIGTERM or SIGINT, it:
-1. Closes the MCP transport (stops accepting new requests)
+1. Closes all active MCP session transports (stops accepting new requests)
 2. Closes the HTTP server
 3. Closes the SQLite database connection
 4. Disposes LLM models from VRAM
@@ -255,9 +255,11 @@ When the server receives SIGTERM or SIGINT, it:
 
 ##### Session Management
 
-The MCP `/mcp` endpoint uses **stateful sessions**. When a client connects, it sends an `initialize` request and receives a session ID (via the `mcp-session-id` header). All subsequent requests must include this session ID.
+The MCP `/mcp` endpoint uses **stateful sessions** with per-client isolation. Each connecting client (Claude Code, Gemini CLI, etc.) gets its own `McpServer` + transport pair, keyed by `mcp-session-id` header. Multiple clients can connect simultaneously — they share the underlying search index and VRAM-resident models.
 
-If the server restarts, the in-memory session ID is lost. Clients that send the old session ID will receive a `404 "Session not found"` error. **The fix is to reconnect the client, not restart the server** — the server is already running fine with a clean state.
+When a client connects, it sends an `initialize` request and receives a session ID. All subsequent requests must include this session ID. Idle sessions are cleaned up automatically after 5 minutes.
+
+If the server restarts, all in-memory session IDs are lost. Clients that send the old session ID will receive a `404 "Session not found"` error. **The fix is to reconnect the client, not restart the server** — the server is already running fine with a clean state.
 
 | Client | How to reconnect |
 |--------|-----------------|
