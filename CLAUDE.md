@@ -165,10 +165,59 @@ curl http://localhost:8181/health                                           # ch
 - **Endpoint**: `POST http://localhost:8181/mcp` (Streamable HTTP, stateless)
 - **Health check**: `GET http://localhost:8181/health`
 - **Logs**: `/tmp/qmd-mcp.log` and `/tmp/qmd-mcp.error.log`
+<<<<<<< HEAD
 - **Binary**: `~/.nvm/versions/node/v24.12.0/bin/qmd` (update path if nvm node version changes)
+=======
+- **Binary**: `~/.bun/bin/qmd` (symlink to local project via `bun link`)
+
+### Health check & status
+
+```sh
+curl http://localhost:8181/health    # {"status":"ok","uptime":<seconds>}
+qmd status                          # shows "MCP: running (PID ...)"
+```
+
+### Killing orphaned processes
+
+If `qmd mcp stop` says "no PID file" but the port is occupied:
+
+```sh
+lsof -i :8181                       # find what owns the port
+lsof -ti :8181 | xargs kill         # kill it (graceful)
+lsof -ti :8181 | xargs kill -9      # force kill
+```
+
+If the server keeps restarting after `kill`, the LaunchAgent is re-spawning it — use `launchctl bootout` instead.
+
+### Session errors
+
+If an MCP client gets `404 "Session not found"` or `"Session expired"`, the server restarted and the client has a stale session ID. **Reconnect the client, not the server** — the server is healthy. In Claude Code, run `/mcp` to reconnect.
+
+The REST endpoints (`/query`, `/search`, `/health`) are stateless and unaffected by session issues.
+
+### Reference
+
+- **MCP endpoint**: `POST http://localhost:8181/mcp` (Streamable HTTP, stateful sessions)
+- **REST endpoint**: `POST http://localhost:8181/query` (stateless, no MCP envelope)
+- **Health check**: `GET http://localhost:8181/health`
+>>>>>>> 29209f7 (docs: document multi-client deployment pipeline and fix stale paths)
 - Claude Code connects via HTTP through `~/.claude/.mcp.json` (not the plugin marketplace.json, which only supports stdio)
 - LLM models stay loaded in VRAM and are shared across all connected agents
 - Embedding/reranking contexts auto-dispose after 5 min idle, recreate on next request (~1s)
+- Multiple MCP clients (Claude Code, Gemini CLI) can connect simultaneously via per-session architecture
+
+### Deploying source changes to the LaunchAgent
+
+After modifying `src/mcp.ts` or other source files, the LaunchAgent won't pick up changes until you rebuild and relink:
+
+```sh
+bun run build                    # compile src/ → dist/
+bun link                         # update ~/.bun/bin/qmd symlink
+launchctl bootout gui/$(id -u)/com.qmd.mcp
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.qmd.mcp.plist
+```
+
+**Common pitfall**: forgetting `bun link` after `bun run build`. The LaunchAgent runs `~/.bun/bin/qmd`, which is a symlink into `~/.bun/install/global/node_modules/@tobilu/qmd/dist/`. Without `bun link`, the global copy stays stale even though `dist/` is updated locally.
 
 ## Do NOT compile
 
