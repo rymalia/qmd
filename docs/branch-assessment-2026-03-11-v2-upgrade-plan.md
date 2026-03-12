@@ -263,18 +263,61 @@ git commit -m "docs: restore local project docs from pre-v2 dev branch"
 
 **Files intentionally NOT copied**: `src/mcp.ts` (superseded), `package.json` zod pin (new dep tree), `bun.lock` (regenerated), `finetune/reward.py` (upstream diverged), `README.md` (upstream rewritten).
 
-### Phase 3b: Clean Up CLAUDE.md / CLAUDE.local.md Duplication
+### Phase 4: Clean Install of v2.0
+
+**Do this before touching CLAUDE files or LaunchAgent config.** The goal is a vanilla v2.0 running in its default configuration, so we can evaluate what's changed before layering customizations back on.
+
+#### 4a: Stop LaunchAgent and clear local customizations
+
+```bash
+# Stop the LaunchAgent so nothing holds the old binary or port
+launchctl bootout gui/$(id -u)/com.qmd.mcp
+
+# Verify port is free
+lsof -i :8181
+
+# Hide CLAUDE.local.md from context (postpone cleanup to Phase 5)
+mv CLAUDE.local.md CLAUDE.local.md.bak
+```
+
+#### 4b: Build and install
+
+```bash
+# Pre-flight: v2.0 bumped better-sqlite3 for Node 25 support.
+# If the runtime-aware bin wrapper resolves to node, it needs >= 25.
+node --version   # verify >= 25, or confirm bun is the active runtime
+
+bun install
+bun run build
+bun link
+
+# Verify
+qmd status
+```
+
+**Note:** The `bun.lock` will be entirely regenerated from v2.0's dependency tree — this is not a cherry-pick decision, it's a full replacement.
+
+#### 4c: Assess MCP and LaunchAgent
+
+After install, examine the v2.0 MCP server before re-enabling the LaunchAgent:
+- Read the new `src/mcp/` source to understand v2.0's session management and daemon behavior
+- Check if v2.0 has its own daemon management story that supersedes our LaunchAgent plist
+- Test the MCP server manually (`qmd mcp --http`) before automating via LaunchAgent
+- Only re-bootstrap the LaunchAgent once you've confirmed the plist paths and env vars are still correct for v2.0
+
+### Phase 5: Clean Up CLAUDE.md / CLAUDE.local.md Duplication
 
 Both `CLAUDE.md` (checked-in, shared) and `CLAUDE.local.md` (private, gitignored) are loaded into context every conversation. They currently have significant overlap — CLI reference, architecture, development commands, and restrictions appear in both, costing tokens for no benefit.
 
 Additionally, v2.0 restructured the source (`src/cli/` + `src/mcp/`, `QMDStore` SDK interface), so the architecture sections in both files are now stale.
 
-**Strategy**: Start fresh from upstream's v2.0 `CLAUDE.md`, then assess what to re-add.
+**Strategy**: Start fresh from upstream's v2.0 `CLAUDE.md`, then assess what to re-add. This is done *after* Phase 4 so we know what v2.0 actually looks like before deciding what local content to keep.
 
 ```bash
-# On the new dev branch, after Phase 3:
+# On the new dev branch:
 mv CLAUDE.md CLAUDE-temp.md              # preserve our version for reference
 git checkout main -- CLAUDE.md           # restore upstream's v2.0 version
+mv CLAUDE.local.md.bak CLAUDE.local.md   # restore for side-by-side review
 ```
 
 Then review `CLAUDE-temp.md` and `CLAUDE.local.md` side by side:
@@ -284,27 +327,9 @@ Then review `CLAUDE-temp.md` and `CLAUDE.local.md` side by side:
 
 **Goal**: zero duplication between the two files. `CLAUDE.md` = project conventions (shared). `CLAUDE.local.md` = personal setup and preferences (private).
 
-### Phase 4: Update Local Install
+### Phase 6: Evaluate Idle Timeout PR
 
-```bash
-# Pre-flight: v2.0 bumped better-sqlite3 for Node 25 support.
-# The LaunchAgent plist has a hardcoded Node path in PATH env.
-# If the runtime-aware bin wrapper resolves to node, it needs >= 25.
-node --version   # verify >= 25, or confirm bun is the active runtime
-
-bun install
-bun run build
-bun link
-# Restart LaunchAgent
-launchctl bootout gui/$(id -u)/com.qmd.mcp
-launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.qmd.mcp.plist
-```
-
-**Note:** The `bun.lock` will be entirely regenerated from v2.0's dependency tree — this is not a cherry-pick decision, it's a full replacement.
-
-### Phase 5: Evaluate Idle Timeout PR
-
-Our idle session cleanup (5-min TTL, 60s interval) addresses a real gap in upstream's implementation. Consider submitting as a focused PR against `upstream/main`:
+Our idle session cleanup (5-min TTL, 60s interval) addresses a real gap in upstream's implementation. This evaluation benefits from Phase 4c — by then you'll have read the v2.0 MCP source and understand the new session model. Consider submitting as a focused PR against `upstream/main`:
 
 - **Important**: the target file is now `src/mcp/` (v2.0 structure), not `src/mcp.ts`. The entire MCP server was rewritten as an SDK consumer in v2.0.0, so this needs to be implemented fresh against the new code — not rebased from our old commit
 - Read the v2.0 MCP source first to understand the new session management pattern
