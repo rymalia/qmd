@@ -2,9 +2,10 @@
 
 **This file is authoritative for our local development environment.**
 **Where this file contradicts CLAUDE.md, THIS FILE WINS.** CLAUDE.md is the upstream
-project's general-purpose instructions and may contain recommendations (like using Bun)
-that are WRONG for our setup. Do not follow CLAUDE.md blindly -- always check here first
-for runtime, build, install, and daemon management instructions.
+project's general-purpose instructions and may contain recommendations that conflict
+with our specific setup (LaunchAgent-managed daemon, source-mode local install,
+npm-primary toolchain). Check here first for runtime, build, install, and daemon
+management instructions.
 
 ## Current Install State
 
@@ -16,7 +17,7 @@ QMD is installed **from local source code**, NOT from the published npm package 
 - **Binary**: `/Users/rymalia/.nvm/versions/node/v24.12.0/bin/qmd` (via `npm link`)
 - **Symlink chain**: `~/.nvm/.../bin/qmd` -> `node_modules/@tobilu/qmd` -> `/Users/rymalia/projects/qmd`
 - **Runtime**: Node.js v24.12.0 (via nvm)
-- **Version**: v2.1.0 (source build on `dev` branch)
+- **Version**: v2.5.2 (source build on `dev` branch, last synced 2026-05-26)
 
 Any change to source followed by `npm run build` is immediately live. No reinstall or re-link needed after the initial `npm link`.
 
@@ -29,33 +30,56 @@ npm run build && npm link
 launchctl load ~/Library/LaunchAgents/com.qmd.mcp.plist
 ```
 
-### Quick Rebuild (no pull, just pick up local changes)
+### Quick Rebuild (pick up local source changes)
 
 ```sh
 npm run build
 pkill -f "qmd.js mcp --http"   # LaunchAgent auto-restarts with new code
 ```
 
-## OVERRIDE: Runtime is Node.js, NOT Bun
+**Source mode note (v2.5.0+):** In a git checkout, the `bin/qmd` launcher prefers
+`src/cli/qmd.ts` via tsx over `dist/cli/qmd.js`. Source changes take effect on the
+next daemon restart even without `npm run build`. The build is still recommended for
+consistency (dist/ matches src/) and for catching TypeScript errors before runtime.
 
-**CLAUDE.md says "Use Bun." IGNORE THAT. Do NOT use Bun** for anything in this project.
-This is an intentional, permanent decision made during the v2.0 upgrade (2026-03-11).
+## Runtime: Node Daemon, npm Primary, Bun Tolerated
 
-**Why:** Bun's built-in SQLite (`bun:sqlite`) does not support `loadExtension()`, which
-means sqlite-vec cannot load. This silently breaks vector search, hybrid queries, and
-`qmd cleanup`. The `bin/qmd` wrapper script detects the runtime by checking for `bun.lock`
--- if it exists, the wrapper routes to Bun, causing ABI mismatches when deps were compiled
-for Node.
+**Status as of v2.5.2 (verified 2026-05-26):** Bun + bun:sqlite + sqlite-vec +
+node-llama-cpp all work end-to-end (vsearch, query with rerank, embed, status).
+The original ban on Bun -- rooted in `bun:sqlite` lacking `loadExtension()` --
+no longer applies. Upstream actively maintains dual-runtime support and runs
+`test:bun` in CI alongside `test:node`.
+
+**Current setup:**
+
+- **MCP daemon (the thing Claude Code talks to):** Node.js v24.12.0 via tsx.
+  LaunchAgent's PATH does not include Bun, so `bin/qmd`'s launcher picks the
+  tsx+Node path. This is the well-tested, stable runtime for the long-running
+  process -- keep it that way.
+- **Interactive `qmd` from your shell:** May invoke Bun if `bun.lock` exists
+  AND `bun` is on PATH. Verified working in v2.5.2. Faster cold start than
+  tsx+Node.
+- **`bun.lock` is tracked upstream.** Do not delete it locally -- it will come
+  back via rebases. The launcher uses it as a runtime-selection hint.
 
 **Rules:**
-- Never run `bun install` -- it recreates `bun.lock`, which flips the runtime back to Bun
-- Never run `bun test`, `bun run`, `bun link`, or any `bun` command
-- Use `npm install`, `npm run build`, `npm link` for all operations
-- Use `npx vitest` for testing
-- The `bun.lock` file was intentionally deleted from this checkout -- do not recreate it
 
-**CLAUDE.md references `bun src/cli/qmd.ts`, `bun link`, `bun test` — replace all of
-those with their npm equivalents when following any instructions from that file.**
+- Use `npm install`, `npm run build`, `npm link` for builds -- keeps deps
+  consistent with the daemon's runtime.
+- `npx vitest` for the local test suite (or `npm test`, which under v2.5.0+
+  runs both `test:node` and `test:bun`).
+- **Do NOT add `bun` to the LaunchAgent's PATH** -- that would flip the daemon
+  to Bun, untested in our deployment.
+- `bun install` is still suspect -- it rewrites `bun.lock` from `package.json`
+  rather than respecting upstream's pinned versions, which can produce ABI
+  mismatches for node-llama-cpp's native binaries. If you need to refresh deps,
+  prefer `npm install`.
+
+**Sanity check after any major change:** Run `qmd doctor`. It reports the
+active runtime, verifies sqlite-vec, embedding fingerprints, GPU probe, and
+content-hash sampling. The runtime line should read `bun:sqlite` (interactive
+under Bun) or `better-sqlite3` (Node). If it reports something else,
+investigate before heavy ops.
 
 ## OVERRIDE: MCP Server -- LaunchAgent Managed
 
