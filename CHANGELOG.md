@@ -2,7 +2,32 @@
 
 ## [Unreleased]
 
+### Documentation
+
+- README: documented collection filtering (`-c` semantics), the `collection
+  show`/`include`/`exclude`/`update-cmd` subcommands, the `--intent`/`--no-rerank`/
+  `-C`/`--full-path` search flags, the `--format <kind>` output selector (with the
+  legacy `--json`/`--csv`/`--md`/`--xml`/`--files` booleans noted as aliases),
+  `vector-search`/`deep-search` aliases, embed
+  memory flags (`--max-docs-per-batch`/`--max-batch-mb`), a sample `--explain`
+  score trace, the `qmd doctor`/`qmd init` commands, the `get` `:from:count`
+  suffix and `--no-line-numbers`, an MCP tool parameter reference, and a
+  Benchmarking section for `qmd bench`.
+- docs/SYNTAX.md: removed the non-existent `q` MCP parameter example (the `query`
+  tool and REST endpoint accept only the `searches` array) and added a Scoping
+  section.
+- README: removed the misleading `qmd update --pull` example. The `--pull` flag is
+  parsed but never consumed (`updateCollections()` ignores it); the real mechanism
+  for running `git pull` before re-indexing is a per-collection `update` command,
+  set via `qmd collection update-cmd`.
+
 ### Fixed
+
+- MCP server instructions now tell agents to scope with the plural `collections`
+  parameter (matching the schema). The previous singular `collection` hint led
+  agents to pass a parameter that Zod silently strips, producing unscoped results.
+  The `get` instruction line also now documents the full `file.md:from:count`
+  range suffix instead of only the single-line `file.md:100` offset.
 
 - Filesystem paths with special characters (`#`, `&`, spaces, `[]`, `()`, etc.)
   now round-trip correctly through index → search → get. Previously

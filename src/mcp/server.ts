@@ -120,7 +120,7 @@ async function buildInstructions(store: QMDStore): Promise<string> {
   if (status.collections.length > 0) {
     lines.push("");
     const names = status.collections.map(c => c.name).join(", ");
-    lines.push(`Collections (scope with \`collection\` parameter): ${names}`);
+    lines.push(`Collections (scope with \`collections\` parameter): ${names}`);
     lines.push("Call the `status` tool for collection descriptions, paths, and per-collection doc counts.");
   }
 
@@ -151,7 +151,7 @@ async function buildInstructions(store: QMDStore): Promise<string> {
   // --- Retrieval workflow ---
   lines.push("");
   lines.push("Retrieval:");
-  lines.push("  - `get` — single document by path or docid (#abc123). Supports line offset (`file.md:100`).");
+  lines.push("  - `get` — single document by path or docid (#abc123). Supports a line-range suffix: `file.md:100` (from line 100) or `file.md:100:40` (40 lines from line 100).");
   lines.push("  - `multi_get` — batch retrieve by glob (`journals/2025-05*.md`) or comma-separated list.");
 
   // --- Non-obvious things that prevent mistakes ---
