@@ -1,5 +1,7 @@
 # QMD Local Environment -- OVERRIDES CLAUDE.md
 
+> **TL;DR — Install method:** `qmd` runs from **local source** (`/Users/rymalia/projects/qmd`) linked via `npm link`, **NOT** the published `@tobilu/qmd` npm package. Edits go live after `npm run build`. Details in [Current Install State](#current-install-state).
+
 **This file is authoritative for our local development environment.**
 **Where this file contradicts CLAUDE.md, THIS FILE WINS.** CLAUDE.md is the upstream
 project's general-purpose instructions and may contain recommendations that conflict
@@ -17,9 +19,33 @@ QMD is installed **from local source code**, NOT from the published npm package 
 - **Binary**: `/Users/rymalia/.nvm/versions/node/v24.12.0/bin/qmd` (via `npm link`)
 - **Symlink chain**: `~/.nvm/.../bin/qmd` -> `node_modules/@tobilu/qmd` -> `/Users/rymalia/projects/qmd`
 - **Runtime**: Node.js v24.12.0 (via nvm)
-- **Version**: v2.5.2 (source build on `dev` branch, last synced 2026-05-26)
+- **Version**: v2.5.3 (source build on `dev` branch, commit a9a8844, last synced 2026-06-06)
 
 Any change to source followed by `npm run build` is immediately live. No reinstall or re-link needed after the initial `npm link`.
+
+### Determining the current version (REQUIRED procedure)
+
+> **When asked "what version are we running?" — do NOT trust a single source.**
+> Because this is a source-mode `npm link` install, the running version, the
+> source, and the compiled `dist/` can disagree. A bare `git pull` updates
+> `package.json` + `src/` and goes live instantly (the launcher runs `src/` via
+> tsx), while `dist/` stays at whatever was last built. Always cross-check all
+> three:
+
+```sh
+qmd --version                         # what's actually running (reads package.json + git HEAD)
+grep '"version"' package.json | head -1   # source version
+git rev-parse --short HEAD             # source commit (matches the (hash) in --version)
+stat -f "%Sm  %N" -t "%Y-%m-%d %H:%M" dist/cli/qmd.js src/cli/qmd.ts  # build freshness
+```
+
+- If `dist/cli/qmd.js` is **older** than `src/cli/qmd.ts`, `dist/` is stale.
+  It doesn't affect the running version *today* (the launcher prefers `src/`
+  via tsx), BUT it's the fallback if tsx is ever unavailable — a stale `dist/`
+  means a silent downgrade to old code. Flag it and offer `npm run build`.
+- The `(hash)` in `qmd --version` is read live from git HEAD; if it doesn't
+  match `git rev-parse --short HEAD`, something is running from a different
+  checkout. Investigate before trusting the version number.
 
 ### Update/Reinstall from Source
 
@@ -44,11 +70,15 @@ consistency (dist/ matches src/) and for catching TypeScript errors before runti
 
 ## Runtime: Node Daemon, npm Primary, Bun Tolerated
 
-**Status as of v2.5.2 (verified 2026-05-26):** Bun + bun:sqlite + sqlite-vec +
-node-llama-cpp all work end-to-end (vsearch, query with rerank, embed, status).
-The original ban on Bun -- rooted in `bun:sqlite` lacking `loadExtension()` --
-no longer applies. Upstream actively maintains dual-runtime support and runs
-`test:bun` in CI alongside `test:node`.
+**Status as of v2.5.3 (re-verified 2026-06-06):** Bun + bun:sqlite + sqlite-vec +
+node-llama-cpp all work end-to-end. Re-verified under `bun:sqlite` (SQLite 3.53.2,
+sqlite-vec v0.1.9): `doctor` clean (GPU Metal probe, 3,155 docs on fingerprint
+c37385, vector sample reproduces), `vsearch` and `query` with qwen3-reranker both
+ran live (query returned a real reranker score). `embed` was NOT re-run (banned
+from auto-execution), but doctor's embedding-freshness + vector-sample checks
+validate the embed output is intact. The original ban on Bun -- rooted in
+`bun:sqlite` lacking `loadExtension()` -- no longer applies. Upstream actively
+maintains dual-runtime support and runs `test:bun` in CI alongside `test:node`.
 
 **Current setup:**
 
