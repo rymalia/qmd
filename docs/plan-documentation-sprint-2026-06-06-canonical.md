@@ -213,6 +213,28 @@ reframe now would add another planning artifact before Phase 1 is even reviewed.
 
 ---
 
+## Phase 1.75: HTTP server docs (future README candidate — staged)
+
+**Framing (canonical):** *QMD has an undocumented HTTP server surface: REST
+`/query`/`/search` plus operational guidance for daemon and LaunchAgent modes.*
+Use that as the PR/issue thesis — it stands on its own and avoids burying a real
+feature reference inside an already-large docs PR.
+
+**Candidate for a future README HTTP section: REST `/query`/`/search` endpoint
+reference plus MCP HTTP server operations.** Salvaged from the `dev-old` branch
+(the only markdown content unique to it; dropped in the v2.0 migration when the
+README was upstream-rewritten), re-verified against v2.5.3, and staged at
+`docs/http-server-rest-api-and-management.md`. Keep separate from Phase 1.25 —
+that PR is cleanly about `index.yml`/`example-index.yml`, and folding HTTP server
+operations into it would muddy the diff. Pick this up as its own pass when there's
+maintainer appetite for documenting the HTTP transport.
+
+**Gating:** none — independent of 1.25; ordered by priority, not dependency. Its
+source is verified and self-contained, so it can proceed whenever there's appetite
+(even before 1.25 lands).
+
+---
+
 ## Upstream PR strategy
 
 - Phase 1: file the docs PR directly; reference issues #25, #181, #217, #372, #520,
