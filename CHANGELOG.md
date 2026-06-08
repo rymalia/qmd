@@ -4,6 +4,18 @@
 
 ### Documentation
 
+- README: added a "Configuring `index.yml`" section documenting the full config
+  schema — `global_context`, `editor_uri`, the `models.embed`/`rerank`/`generate`
+  overrides, and per-collection `path`/`pattern`/`ignore`/`update`/
+  `includeByDefault`/`context` — with file-location rules (`XDG_CONFIG_HOME`,
+  `QMD_CONFIG_DIR`, named `{name}.yml`, project-local `.qmd/index.yml`). Every key
+  is verified against `src/collections.ts` and its consumers. Documents behavior
+  that previously existed only in code, where the absence of docs led contributors
+  to repeatedly re-submit already-shipped model-resolution fixes (#502, #559, #564)
+  and to request config that already works (#645, #678). Added
+  `XDG_CONFIG_HOME`/`QMD_CONFIG_DIR` to the environment-variable table and noted
+  the `index.yml` `models:` / `QMD_EMBED_MODEL` override path in the Model
+  Configuration section.
 - README: documented collection filtering (`-c` semantics), the `collection
   show`/`include`/`exclude`/`update-cmd` subcommands, the `--intent`/`--no-rerank`/
   `-C`/`--full-path` search flags, the `--format <kind>` output selector (with the
