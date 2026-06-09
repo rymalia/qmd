@@ -16,6 +16,18 @@
   `XDG_CONFIG_HOME`/`QMD_CONFIG_DIR` to the environment-variable table and noted
   the `index.yml` `models:` / `QMD_EMBED_MODEL` override path in the Model
   Configuration section.
+- README: expanded the per-collection `update` field into an "Automatic update
+  commands" subsection — the feature the maintainer publicly called under-documented
+  — covering execution via `bash -c` in the collection's directory, the run-then-
+  reindex order, the non-zero-exit abort behavior, and the `qmd collection
+  update-cmd` set/clear shortcut. The `ignore` key now states it is YAML-only (no
+  CLI command) and additive with the un-overridable built-in exclusions.
+- `example-index.yml`: overhauled from three near-identical collections into a
+  fully-commented starter template where each collection demonstrates a distinct
+  feature (hierarchical context, auto-`update`, `ignore` patterns, non-markdown
+  globs, `includeByDefault: false`, and an all-fields example), plus commented
+  `editor_uri`/`models` stubs. README now links to it. Model URIs are intentionally
+  left as placeholders so the template can't drift from the defaults.
 - README: documented collection filtering (`-c` semantics), the `collection
   show`/`include`/`exclude`/`update-cmd` subcommands, the `--intent`/`--no-rerank`/
   `-C`/`--full-path` search flags, the `--format <kind>` output selector (with the

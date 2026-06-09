@@ -653,7 +653,8 @@ qmd context rm qmd://notes/old
 The `collection` and `context` commands above all read and write a single YAML
 config file — you can also edit it directly. Everything QMD knows about your
 collections (paths, masks, exclusions, per-collection update hooks, contexts, and
-optional model overrides) lives here.
+optional model overrides) lives here. A fully-commented starter template ships as
+[`example-index.yml`](example-index.yml) in this repo.
 
 **Location:** `~/.config/qmd/index.yml` by default. The directory honors
 `XDG_CONFIG_HOME` (→ `$XDG_CONFIG_HOME/qmd/index.yml`) and `QMD_CONFIG_DIR`. A
@@ -702,7 +703,7 @@ collections:
 | `models.embed` / `.rerank` / `.generate` | top-level | HuggingFace GGUF URIs (`hf:<user>/<repo>/<file>`) overriding the built-in defaults per role. |
 | `collections.<name>.path` | per-collection | Absolute directory to index. |
 | `collections.<name>.pattern` | per-collection | Glob mask. Set via `qmd collection add --mask`. Default `**/*.md`. |
-| `collections.<name>.ignore` | per-collection | Glob patterns excluded from indexing — useful to stop nested collections double-indexing. |
+| `collections.<name>.ignore` | per-collection | Glob patterns excluded from indexing — useful to stop nested collections double-indexing. **YAML-only — no CLI command sets this.** Additive with QMD's built-in exclusions (`node_modules`, `.git`, `.cache`, `vendor`, `dist`, `build`), which you cannot un-ignore. |
 | `collections.<name>.update` | per-collection | Bash command run before `qmd update` re-indexes this collection. Set via `qmd collection update-cmd`. |
 | `collections.<name>.includeByDefault` | per-collection | Whether unscoped queries search it. Toggle with `qmd collection include`/`exclude`. Default `true`. |
 | `collections.<name>.context` | per-collection | Path-prefix → description map; the most specific (longest) matching prefix wins. Set via `qmd context add`. |
@@ -710,6 +711,37 @@ collections:
 > **Note:** Editing `index.yml` changes which directories and models QMD *uses*,
 > but does not re-index on its own. Run `qmd update` after changing `path`,
 > `pattern`, or `ignore`, and `qmd embed` after changing `models.embed`.
+
+#### Automatic update commands
+
+A collection's `update` field is QMD's built-in refresh hook: when you run
+`qmd update`, each collection's `update` command runs **first**, then the
+collection is re-indexed. This keeps a collection in sync with an upstream source
+(a git remote, a sync script) without wrapping `qmd` yourself.
+
+```yaml
+collections:
+  wiki:
+    path: ~/reference/wiki
+    update: "git pull --ff-only"
+```
+
+    $ qmd update
+    [1/3] wiki (**/*.md)
+        Running update command: git pull --ff-only
+        Already up to date.
+    Collection: ~/reference/wiki (**/*.md)
+    Indexed: 0 new, 2 updated, 340 unchanged, 0 removed
+
+The command runs via `bash -c` in the collection's own directory (its `path`), not
+your current working directory. If it exits non-zero, `qmd update` prints the
+failure and **aborts the entire run** — collections after the failing one are not
+re-indexed. Set or clear it from the CLI instead of editing YAML by hand:
+
+```sh
+qmd collection update-cmd wiki 'git pull --ff-only'   # set
+qmd collection update-cmd wiki                         # clear
+```
 
 ### Search Commands
 
