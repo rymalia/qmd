@@ -19,7 +19,7 @@ QMD is installed **from local source code**, NOT from the published npm package 
 - **Binary**: `/Users/rymalia/.nvm/versions/node/v24.18.0/bin/qmd` (via `npm link`)
 - **Symlink chain**: `~/.nvm/.../bin/qmd` -> `node_modules/@tobilu/qmd` -> `/Users/rymalia/projects/qmd`
 - **Runtime**: Node.js v24.18.0 (via nvm; upgraded from v24.12.0 ~2026-06-30 — the old nvm dir was removed, which broke the LaunchAgent's hardcoded path until it was repointed on 2026-07-07)
-- **Version**: v2.5.3 (source build on `dev` branch, commit a9a8844, last synced 2026-06-06)
+- **Version**: v2.6.3 (source, `main` branch, commit e428df7, fast-forwarded 2026-07-07). The old `dev` branch still exists with 24 unmerged local commits (mostly docs/session summaries); main gained 35 upstream commits (v2.5.3 → v2.6.3) that dev lacks.
 
 Any change to source followed by `npm run build` is immediately live. No reinstall or re-link needed after the initial `npm link`.
 
@@ -46,6 +46,13 @@ stat -f "%Sm  %N" -t "%Y-%m-%d %H:%M" dist/cli/qmd.js src/cli/qmd.ts  # build fr
 - The `(hash)` in `qmd --version` is read live from git HEAD; if it doesn't
   match `git rev-parse --short HEAD`, something is running from a different
   checkout. Investigate before trusting the version number.
+- **The running daemon's reported version can lie.** The MCP `serverInfo.version`
+  (and `qmd --version`) read `package.json` live at request time — a daemon
+  started before a branch switch/rebuild reports the NEW version while running
+  OLD code from memory (observed 2026-07-07: daemon started on dev/v2.5.3
+  reported "2.6.3" after the checkout moved to main). The truth is the process
+  start time: `ps -o lstart -p $(pgrep -f "cli/qmd.ts mcp --http")` — if it
+  predates the rebuild/switch, restart the daemon.
 
 ### Update/Reinstall from Source
 
@@ -60,46 +67,62 @@ launchctl load ~/Library/LaunchAgents/com.qmd.mcp.plist
 
 ```sh
 npm run build
-pkill -f "qmd.js mcp --http"   # LaunchAgent auto-restarts with new code
+pkill -f "cli/qmd.[tj]s mcp --http"   # LaunchAgent auto-restarts with new code
 ```
 
-**Source mode note (v2.5.0+):** In a git checkout, the `bin/qmd` launcher prefers
-`src/cli/qmd.ts` via tsx over `dist/cli/qmd.js`. Source changes take effect on the
-next daemon restart even without `npm run build`. The build is still recommended for
-consistency (dist/ matches src/) and for catching TypeScript errors before runtime.
+(The old documented pattern `pkill -f "qmd.js mcp --http"` matches nothing in
+source mode — the process cmdline is `.../src/cli/qmd.ts mcp --http` under tsx.
+The pattern above matches both source and dist mode. Verified 2026-07-07.)
+
+**Source mode note (re-verified on v2.6.3):** In a git checkout, the `bin/qmd`
+launcher (now a cross-platform Node script, no longer POSIX shell) runs
+`src/cli/qmd.ts` instead of `dist/cli/qmd.js`. Source-mode detection gates on the
+package dir NOT being inside `node_modules/` (override: `QMD_SOURCE_MODE=1`/`0`),
+and the runner is **lockfile-driven**: `package-lock.json` present → Node+tsx
+(wins over `bun.lock` even when both exist); only `bun.lock` + bun on PATH → Bun.
+Source changes take effect on the next daemon restart even without `npm run build`.
+The build is still recommended for consistency (dist/ matches src/) and for
+catching TypeScript errors before runtime.
 
 ## Runtime: Node Daemon, npm Primary, Bun Tolerated
 
-**Status as of v2.5.3 (re-verified 2026-06-06):** Bun + bun:sqlite + sqlite-vec +
-node-llama-cpp all work end-to-end. Re-verified under `bun:sqlite` (SQLite 3.53.2,
-sqlite-vec v0.1.9): `doctor` clean (GPU Metal probe, 3,155 docs on fingerprint
-c37385, vector sample reproduces), `vsearch` and `query` with qwen3-reranker both
-ran live (query returned a real reranker score). `embed` was NOT re-run (banned
-from auto-execution), but doctor's embedding-freshness + vector-sample checks
-validate the embed output is intact. The original ban on Bun -- rooted in
-`bun:sqlite` lacking `loadExtension()` -- no longer applies. Upstream actively
-maintains dual-runtime support and runs `test:bun` in CI alongside `test:node`.
+**Status as of v2.6.3 (re-verified 2026-07-07):** `doctor` fully clean under
+better-sqlite3 (SQLite 3.53.1, sqlite-vec v0.1.9, GPU Metal probe on M3, 3,486
+docs on fingerprint c37385, vector sample reproduces). `search`, `vsearch`,
+`query` (incl. multi-line typed query documents with `intent:` — new in 2.6.x,
+see docs/SYNTAX.md), `get`, `multi-get`, and all four MCP tools ran live.
+`embed` was NOT re-run (banned from auto-execution), but doctor's
+embedding-freshness + vector-sample checks validate the embed output is intact.
+Upstream still maintains dual-runtime support (`npm test` runs the Bun suite).
+New in 2.6.x: the launcher sets `GGML_METAL_NO_RESIDENCY=1` on darwin (avoids a
+llama.cpp Metal teardown abort; doctor reports it as an expected env override).
 
 **Current setup:**
 
 - **MCP daemon (the thing Claude Code talks to):** Node.js v24.18.0 via tsx.
-  LaunchAgent's PATH does not include Bun, so `bin/qmd`'s launcher picks the
-  tsx+Node path. This is the well-tested, stable runtime for the long-running
-  process -- keep it that way.
-- **Interactive `qmd` from your shell:** May invoke Bun if `bun.lock` exists
-  AND `bun` is on PATH. Verified working in v2.5.2. Faster cold start than
-  tsx+Node.
+  Runner selection is now lockfile-driven (see Source mode note above): our
+  untracked local `package-lock.json` (from `npm install`) forces Node+tsx
+  regardless of PATH. This is the well-tested, stable runtime for the
+  long-running process -- keep it that way.
+- **Interactive `qmd` from your shell:** Also Node+tsx now, always — v2.6.x's
+  launcher prefers `package-lock.json` over `bun.lock`, so bun on PATH no
+  longer flips the runtime (pre-2.6 behavior where Bun could be selected is
+  obsolete; verified 2026-07-07, doctor reports `better-sqlite3`). To get Bun
+  you'd have to delete `package-lock.json` — don't.
 - **`bun.lock` is tracked upstream.** Do not delete it locally -- it will come
-  back via rebases. The launcher uses it as a runtime-selection hint.
+  back via rebases. `package-lock.json` is local-only (untracked) and is what
+  pins us to Node.
 
 **Rules:**
 
 - Use `npm install`, `npm run build`, `npm link` for builds -- keeps deps
   consistent with the daemon's runtime.
-- `npx vitest` for the local test suite (or `npm test`, which under v2.5.0+
-  runs both `test:node` and `test:bun`).
-- **Do NOT add `bun` to the LaunchAgent's PATH** -- that would flip the daemon
-  to Bun, untested in our deployment.
+- `npx vitest` for the local test suite (or `npm test`, which under v2.6.x runs
+  `scripts/test-all.mjs`: TypeScript typecheck + vitest under Node + `bun test`
+  + package smoke test).
+- **Do NOT add `bun` to the LaunchAgent's PATH.** (Since v2.6.x the lockfile
+  decides the runtime, so bun on PATH alone can't flip the daemon anymore --
+  but keep PATH minimal anyway; the rule costs nothing.)
 - `bun install` is still suspect -- it rewrites `bun.lock` from `package.json`
   rather than respecting upstream's pinned versions, which can produce ABI
   mismatches for node-llama-cpp's native binaries. If you need to refresh deps,
@@ -107,9 +130,9 @@ maintains dual-runtime support and runs `test:bun` in CI alongside `test:node`.
 
 **Sanity check after any major change:** Run `qmd doctor`. It reports the
 active runtime, verifies sqlite-vec, embedding fingerprints, GPU probe, and
-content-hash sampling. The runtime line should read `bun:sqlite` (interactive
-under Bun) or `better-sqlite3` (Node). If it reports something else,
-investigate before heavy ops.
+content-hash sampling. In our setup the runtime line should always read
+`better-sqlite3` (Node) — `bun:sqlite` would mean `package-lock.json` went
+missing. If it reports something else, investigate before heavy ops.
 
 ## OVERRIDE: MCP Server -- LaunchAgent Managed
 
@@ -144,10 +167,15 @@ launchctl load ~/Library/LaunchAgents/com.qmd.mcp.plist
 After `npm run build`, kill the process and LaunchAgent restarts it with the new code within seconds:
 
 ```sh
-pkill -f "qmd.js mcp --http"
+pkill -f "cli/qmd.[tj]s mcp --http"
 ```
 
 Or for a clean stop/start: `launchctl unload` then `launchctl load`.
+
+**Then re-verify what's actually loaded** (the daemon's reported version alone
+is not proof — see "Determining the current version"): the process start time
+from `ps -o lstart -p $(pgrep -f "cli/qmd.ts mcp --http")` must postdate the
+rebuild.
 
 ## Three-Layer Integration Architecture
 
@@ -165,7 +193,7 @@ Connects to the LaunchAgent daemon. Provides the actual tools: `query`, `get`, `
 
 Provides the skill file (SKILL.md) that teaches Claude how to write good QMD queries. Re-clones from GitHub on session start. Plugin version `0.1.0` is the plugin *format* version, not the QMD software version.
 
-Currently pointing to local repo (`git:///Users/rymalia/projects/qmd` in `known_marketplaces.json`) for dev iteration. Revert to `github:tobi/qmd` after upstream PRs merge.
+Currently pointing to local repo (`/Users/rymalia/projects/qmd` in `known_marketplaces.json`) for dev iteration. The original reason to wait — upstream docs PRs #718/#719 — resolved: both MERGED as of 2026-07-07 (#716 is an open *issue*, not a PR). Reverting to `github:tobi/qmd` is now unblocked whenever we're done iterating locally. The PR-watch cloud cron routine watching those PRs can be disabled.
 
 ### Layer 3: `qmd skill install` (optional, redundant for us)
 
@@ -187,10 +215,12 @@ src/index.ts          SDK entry point -- public QMDStore interface, createStore(
   src/store.ts        Internal data layer (SQLite, FTS5, vectors, search pipeline)
   src/maintenance.ts  Cleanup, indexing operations
 
-src/cli/qmd.ts        CLI -- consumes SDK
+src/cli/qmd.ts        CLI -- consumes SDK (also reads repo skills/ dir for `qmd skill install`)
 src/mcp/server.ts     MCP server -- consumes SDK
-src/embedded-skills.ts  Powers `qmd skill install`
 ```
+
+(`src/embedded-skills.ts` no longer exists in v2.6.x — skill content lives in
+the repo's `skills/` directory, read by the CLI.)
 
 MCP tools go through the `QMDStore` interface, not raw store methods.
 
@@ -206,6 +236,7 @@ SQLite at `~/.cache/qmd/index.sqlite` with WAL mode:
 | **content_vectors** | Embedding chunk metadata (hash, sequence, position) |
 | **vectors_vec** | sqlite-vec virtual table (float[384], cosine distance) |
 | **llm_cache** | Cached LLM responses keyed by input hash |
+| **store_collections** | Collection registry (new in 2.6.x; config source of truth remains `~/.config/qmd/index.yml`) |
 
 ### Search Pipeline (hybrid `query` command)
 
@@ -216,6 +247,52 @@ SQLite at `~/.cache/qmd/index.sqlite` with WAL mode:
 5. **Chunk selection** -- best chunk selected by keyword overlap
 6. **LLM reranking** -- top 40 candidates via qwen3-reranker (yes/no + logprobs)
 7. **Position-aware blending** -- ranks 1-3: 75% RRF / 25% reranker; 4-10: 60/40; 11+: 40/60
+
+(All constants re-verified against v2.6.3 source on 2026-07-07: strong-signal
+probe 0.85 / gap 0.15, `RERANK_CANDIDATE_LIMIT = 40`, RRF `k = 60`, blend
+weights 0.75/0.60/0.40. New in 2.6.x: the CLI accepts multi-line typed query
+documents — `qmd query $'intent: ...\nlex: ...\nvec: ...'` — see docs/SYNTAX.md.)
+
+### Known doc-vs-code gaps: multi-get comma-lists (v2.6.3, verified 2026-07-07)
+
+The CLI and MCP comma-list branches are **two independent implementations with
+divergent semantics** (CLI: `src/cli/qmd.ts` `multiGet`, matches bare `d.path`;
+MCP/SDK: `src/store.ts` `findDocuments`, matches the reconstructed
+`qmd://collection/path` URI). Verified matrix:
+
+| Pattern form | CLI comma-list | MCP `multi_get` |
+|---|---|---|
+| `docs/SYNTAX.md` (collection-relative) | ✅ | ✅ |
+| `qmd/docs/SYNTAX.md` (collection-prefixed) | ❌ "File not found" | ✅ |
+| `qmd://qmd/docs/SYNTAX.md` (full URI) | ✅ | ✅ |
+| `#abc123` (docid) | ❌ | ❌ |
+| `NTAX.md` (filename fragment) | ⚠️ silently matches SYNTAX.md | ⚠️ same |
+
+- **Docids fail everywhere in multi-get** despite CLAUDE.md and README
+  documenting `qmd multi-get "#abc123, #def456"`. Neither implementation has a
+  docid branch (`get` uses a separate `findDocumentByDocid` that multi-get never
+  touches). Single-docid patterns hit the glob branch and fail too.
+- **Suffix matching is an unanchored `LIKE '%name'`** — no path-separator
+  anchor, so a typo'd name can silently fetch the *wrong document* instead of
+  erroring (and the did-you-mean path never fires).
+- **Unprefixed names resolve globally with `LIMIT 1`, no `ORDER BY`** — which
+  collection wins is arbitrary (`README.md` → `tweet/README.md` here).
+- **Safe form: always use full `qmd://collection/path` URIs in comma-lists** —
+  the only pattern form that works in every branch of both implementations.
+  For docids, fall back to one `get` per docid.
+- Related parseability defect: multi-get's `--format files` prepends the docid
+  *inside* the first CSV field (`#1b5968 docs/SYNTAX.md,"context"`), so naive
+  comma-splitting mangles the first column. (`--format files` itself emitting
+  headerless `docid,score,path,"context"` CSV is by design and original
+  behavior — shipped in v0.9.0, the first published release.)
+
+Upstream status (2026-07-07): the docid gap was already filed as **#706** with a
+fix in review (**PR #753**, covers CLI + SDK + MCP with tests — if merged, the
+docid rows above flip to ✅). The path-matching divergence / unanchored-suffix /
+arbitrary-LIMIT-1 semantics are NOT covered by #753 (explicit non-goal) — we
+filed those as **#759**, and the `--format files` docid-in-first-field defect as
+**#760**. We also posted the matrix to the #706 thread and a scope-confirming
+comment on #753 (2026-07-07).
 
 ## Agent Preferences
 
