@@ -16,9 +16,9 @@ management instructions.
 QMD is installed **from local source code**, NOT from the published npm package on npmjs.
 
 - **Source**: `/Users/rymalia/projects/qmd` (git clone of `tobi/qmd` fork)
-- **Binary**: `/Users/rymalia/.nvm/versions/node/v24.12.0/bin/qmd` (via `npm link`)
+- **Binary**: `/Users/rymalia/.nvm/versions/node/v24.18.0/bin/qmd` (via `npm link`)
 - **Symlink chain**: `~/.nvm/.../bin/qmd` -> `node_modules/@tobilu/qmd` -> `/Users/rymalia/projects/qmd`
-- **Runtime**: Node.js v24.12.0 (via nvm)
+- **Runtime**: Node.js v24.18.0 (via nvm; upgraded from v24.12.0 ~2026-06-30 — the old nvm dir was removed, which broke the LaunchAgent's hardcoded path until it was repointed on 2026-07-07)
 - **Version**: v2.5.3 (source build on `dev` branch, commit a9a8844, last synced 2026-06-06)
 
 Any change to source followed by `npm run build` is immediately live. No reinstall or re-link needed after the initial `npm link`.
@@ -82,7 +82,7 @@ maintains dual-runtime support and runs `test:bun` in CI alongside `test:node`.
 
 **Current setup:**
 
-- **MCP daemon (the thing Claude Code talks to):** Node.js v24.12.0 via tsx.
+- **MCP daemon (the thing Claude Code talks to):** Node.js v24.18.0 via tsx.
   LaunchAgent's PATH does not include Bun, so `bin/qmd`'s launcher picks the
   tsx+Node path. This is the well-tested, stable runtime for the long-running
   process -- keep it that way.
