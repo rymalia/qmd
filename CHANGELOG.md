@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+## [2.6.3] - 2026-06-24
+
+### Added
+
+- `qmd embed --timeout <minutes>` overrides the embed session's max duration
+  (previously hardcoded to 30 minutes). Use a larger value to let a big index
+  finish in one run, or `--timeout 0` to remove the cap entirely. When the cap is
+  reached, remaining document batches are skipped as before, so re-running
+  `qmd embed` continues where it left off.
+
 ### Documentation
 
 - README: added a "Configuring `index.yml`" section documenting the full config
@@ -73,6 +83,27 @@
 - The embed session `maxDuration` is now env-configurable via
   `QMD_EMBED_MAX_DURATION_MS` (default: 30 min). This prevents large-corpus
   embeddings from being aborted by the hardcoded 30-minute ceiling (#673).
+- `qmd query`, `qmd update`, and other commands no longer fail with
+  `SQLiteError: database is locked` when multiple processes run against the
+  same index in parallel (e.g. an `update` racing a long `embed`, the
+  first-open schema migration racing a routine command, or an agent fanning
+  out searches). `openDatabase` now sets `PRAGMA busy_timeout = 120000` on
+  every connection, so a writer that loses the race queues at batch
+  boundaries instead of throwing immediately. WAL handles read/write
+  concurrency but does not serialise concurrent writers, and `bun:sqlite`
+  and `better-sqlite3` both default the timeout to 0, so the loser
+  previously failed on the first DDL statement in `initializeDatabase`.
+  Override the default with `QMD_SQLITE_BUSY_TIMEOUT` (milliseconds; `0`
+  restores fail-fast). Two more crashes on the same concurrent-open
+  path are fixed: `trigger documents_ai already exists` (the FTS sync
+  triggers were dropped and recreated as separate statements on every
+  open, so two processes interleaved between the `DROP` and the
+  `CREATE`; `busy_timeout` serialises individual statements but not the
+  pair) and `database is locked` while migrating a cold database to WAL
+  (the `journal_mode` switch needs a brief exclusive lock and does not
+  invoke the busy handler). FTS trigger setup is now gated behind
+  `PRAGMA user_version` inside one `IMMEDIATE` transaction, and the WAL
+  migration retries within the busy-timeout budget.
 
 ## [2.5.3] - 2026-05-28
 

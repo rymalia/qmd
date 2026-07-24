@@ -709,6 +709,11 @@ export class LlamaCpp implements LLM {
   private embedModelLoadPromise: Promise<LlamaModel> | null = null;
   private generateModelLoadPromise: Promise<LlamaModel> | null = null;
   private rerankModelLoadPromise: Promise<LlamaModel> | null = null;
+  // Guard against concurrent ensureLlama() calls creating duplicate Llama
+  // instances. Without this, two concurrent callers each build their own
+  // runtime and the last write to this.llama wins, leaving models/grammars
+  // bound to different Llama instances ("different Llama instance" errors).
+  private llamaLoadPromise: Promise<Llama> | null = null;
 
   // Inactivity timer for auto-unloading models
   private inactivityTimer: ReturnType<typeof setTimeout> | null = null;
@@ -849,6 +854,21 @@ export class LlamaCpp implements LLM {
    * Initialize the llama instance (lazy)
    */
   private async ensureLlama(allowBuild = true): Promise<Llama> {
+    if (this.llama) {
+      return this.llama;
+    }
+    if (this.llamaLoadPromise) {
+      return await this.llamaLoadPromise;
+    }
+    this.llamaLoadPromise = this.loadLlamaRuntime(allowBuild);
+    try {
+      return await this.llamaLoadPromise;
+    } finally {
+      this.llamaLoadPromise = null;
+    }
+  }
+
+  private async loadLlamaRuntime(allowBuild = true): Promise<Llama> {
     if (!this.llama) {
       const gpuMode = resolveLlamaGpuMode();
 
@@ -1442,29 +1462,33 @@ export class LlamaCpp implements LLM {
     const includeLexical = options.includeLexical ?? true;
     const context = options.context;
 
-    const grammar = await llama.createGrammar({
-      grammar: `
-        root ::= line+
-        line ::= type ": " content "\\n"
-        type ::= "lex" | "vec" | "hyde"
-        content ::= [^\\n]+
-      `
-    });
-
     const intent = options.intent;
     const prompt = intent
       ? `/no_think Expand this search query: ${query}\nQuery intent: ${intent}`
       : `/no_think Expand this search query: ${query}`;
 
-    // Create a bounded context for expansion to prevent large default VRAM allocations.
-    const genContext = await this.generateModel!.createContext({
-      contextSize: this.expandContextSize,
-    });
-    const sequence = genContext.getSequence();
-    const { LlamaChatSession } = await loadNodeLlamaCpp();
-    const session = new LlamaChatSession({ contextSequence: sequence });
-
+    // Set up inside the try so any failure (grammar creation, context
+    // allocation/VRAM, session prompt) falls back to the original query
+    // instead of propagating and failing the caller's operation.
+    let genContext: Awaited<ReturnType<LlamaModel["createContext"]>> | undefined;
     try {
+      const grammar = await llama.createGrammar({
+        grammar: `
+        root ::= line+
+        line ::= type ": " content "\\n"
+        type ::= "lex" | "vec" | "hyde"
+        content ::= [^\\n]+
+      `
+      });
+
+      // Create a bounded context for expansion to prevent large default VRAM allocations.
+      genContext = await this.generateModel!.createContext({
+        contextSize: this.expandContextSize,
+      });
+      const sequence = genContext.getSequence();
+      const { LlamaChatSession } = await loadNodeLlamaCpp();
+      const session = new LlamaChatSession({ contextSequence: sequence });
+
       // Qwen3 recommended settings for non-thinking mode:
       // temp=0.7, topP=0.8, topK=20, presence_penalty for repetition
       // DO NOT use greedy decoding (temp=0) - causes infinite loops
@@ -1517,7 +1541,7 @@ export class LlamaCpp implements LLM {
       if (includeLexical) fallback.unshift({ type: 'lex', text: query });
       return fallback;
     } finally {
-      await genContext.dispose();
+      if (genContext) await genContext.dispose();
     }
   }
 
@@ -1702,6 +1726,7 @@ export class LlamaCpp implements LLM {
     this.embedContextsCreatePromise = null;
     this.generateModelLoadPromise = null;
     this.rerankModelLoadPromise = null;
+    this.llamaLoadPromise = null;
   }
 }
 
