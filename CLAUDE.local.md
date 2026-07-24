@@ -19,7 +19,7 @@ QMD is installed **from local source code**, NOT from the published npm package 
 - **Binary**: `/Users/rymalia/.nvm/versions/node/v24.18.0/bin/qmd` (via `npm link`)
 - **Symlink chain**: `~/.nvm/.../bin/qmd` -> `node_modules/@tobilu/qmd` -> `/Users/rymalia/projects/qmd`
 - **Runtime**: Node.js v24.18.0 (via nvm; upgraded from v24.12.0 ~2026-06-30 — the old nvm dir was removed, which broke the LaunchAgent's hardcoded path until it was repointed on 2026-07-07)
-- **Version**: v2.6.3 (source, `main` branch, commit e428df7, fast-forwarded 2026-07-07). The old `dev` branch still exists with 24 unmerged local commits (mostly docs/session summaries); main gained 35 upstream commits (v2.5.3 → v2.6.3) that dev lacks.
+- **Version**: v2.6.3 (source, `dev` branch, commit d39452d — merge of main/e428df7 into dev on 2026-07-24). **`dev` is the working branch**: it equals main plus 25 local docs commits (session summaries, doc-sprint artifacts, this file) with **zero source divergence** — `git diff main dev -- src/ bin/ test/ package.json` is empty. Note v2.6.3 is upstream main's *unpublished* version: release PR #746 merged 2026-06-24 but was never tagged/published, so npm and GitHub releases still say v2.5.3.
 
 Any change to source followed by `npm run build` is immediately live. No reinstall or re-link needed after the initial `npm link`.
 
@@ -58,7 +58,8 @@ stat -f "%Sm  %N" -t "%Y-%m-%d %H:%M" dist/cli/qmd.js src/cli/qmd.ts  # build fr
 
 ```sh
 launchctl unload ~/Library/LaunchAgents/com.qmd.mcp.plist
-git pull
+git pull                                   # syncs origin/dev (our docs) only
+git fetch upstream && git merge upstream/main   # pulls new upstream code into dev
 npm run build && npm link
 launchctl load ~/Library/LaunchAgents/com.qmd.mcp.plist
 ```
