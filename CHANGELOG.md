@@ -4,6 +4,15 @@
 
 ### Fixed
 
+- Claude Code plugin: releases now bump the plugin version in
+  `.claude-plugin/marketplace.json` in lockstep with `package.json`. The
+  plugin cache is keyed on this version, and it had been stuck at `0.1.0`
+  since February — so installed plugins never received skill updates
+  (users who installed in February are still being served that snapshot
+  today, despite the qmd skill nearly tripling in size since). Also bumps
+  the plugin to `2.6.3` as a one-time catch-up so existing installs pick
+  up the current skill on their next `claude plugin update`.
+
 - `qmd doctor` no longer false-positives `.etag` HTTP sidecars (written by
   `qmd pull` next to each download) as invalid GGUF models. The model-cache
   check now only inspects real `.gguf` files, so a sidecar that happens to

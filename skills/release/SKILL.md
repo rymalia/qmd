@@ -31,7 +31,9 @@ When the user triggers `/release <version>`:
 
 4. **Cut the release** — run `scripts/release.sh <version>`. This renames
    `[Unreleased]` → `[X.Y.Z] - date`, inserts a fresh `[Unreleased]`,
-   bumps `package.json`, commits, and tags.
+   bumps `package.json` and the plugin version in
+   `.claude-plugin/marketplace.json` (so installed plugins see the update),
+   commits, and tags.
 
 5. **Show the final changelog** — print the full `[Unreleased]` +
    minor series rollup via `scripts/extract-changelog.sh <version>`.
