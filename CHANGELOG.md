@@ -4,6 +4,13 @@
 
 ### Fixed
 
+- Claude Code plugin: scope the plugin `source` to `./skills` so installs
+  copy just the skills (~50 KB) instead of the entire repository. Previously a
+  canonical install materialized ~230 MB / 9,000+ items into
+  `~/.claude/plugins/cache/` — including a full npm dependency install
+  triggered by the repo-root `package.json`. Both skills (`qmd` and `release`)
+  still ship, unchanged. (#790)
+
 - `qmd collection add` now rejects missing paths and regular files before
   creating collection configuration or index state. The error reports both the
   received and resolved path so malformed shell arguments can be corrected.
