@@ -19,7 +19,7 @@ QMD is installed **from local source code**, NOT from the published npm package 
 - **Binary**: `/Users/rymalia/.nvm/versions/node/v24.18.0/bin/qmd` (via `npm link`)
 - **Symlink chain**: `~/.nvm/.../bin/qmd` -> `node_modules/@tobilu/qmd` -> `/Users/rymalia/projects/qmd`
 - **Runtime**: Node.js v24.18.0 (via nvm; upgraded from v24.12.0 ~2026-06-30 — the old nvm dir was removed, which broke the LaunchAgent's hardcoded path until it was repointed on 2026-07-07)
-- **Version**: v2.6.3 (source, `dev` branch, commit d39452d — merge of main/e428df7 into dev on 2026-07-24). **`dev` is the working branch**: it equals main plus 25 local docs commits (session summaries, doc-sprint artifacts, this file) with **zero source divergence** — `git diff main dev -- src/ bin/ test/ package.json` is empty. Note v2.6.3 is upstream main's *unpublished* version: release PR #746 merged 2026-06-24 but was never tagged/published, so npm and GitHub releases still say v2.5.3.
+- **Version**: v2.6.3 (source, `dev` branch). **Caught up to upstream/main `200bf98` on 2026-08-13** — merged tobi's big 2026-08-13 spree (49 files, ~6.8k insertions: multi-get fixes #753/#846/#868, mcp-pid, embed-lock, version.ts, release-context.sh, many new tests) into dev. The merge is **staged with `--no-commit`, awaiting the user's commit** (marketplace.json conflict resolved to upstream's `source: ./skills` + `version: 2.6.3` + `release` skill + mcpServers block; a local `./skills`/`0.1.4` experiment was stashed as superseded). After that commit, dev is ahead of the local `main` branch (still at old main) until main is fast-forwarded. Note v2.6.3 is upstream main's *unpublished* version: release PR #746 merged 2026-06-24 but was never tagged/published, so npm and GitHub releases still say v2.5.3 (this spree is also merged-but-unreleased).
 
 Any change to source followed by `npm run build` is immediately live. No reinstall or re-link needed after the initial `npm link`.
 
@@ -254,46 +254,35 @@ probe 0.85 / gap 0.15, `RERANK_CANDIDATE_LIMIT = 40`, RRF `k = 60`, blend
 weights 0.75/0.60/0.40. New in 2.6.x: the CLI accepts multi-line typed query
 documents — `qmd query $'intent: ...\nlex: ...\nvec: ...'` — see docs/SYNTAX.md.)
 
-### Known doc-vs-code gaps: multi-get comma-lists (v2.6.3, verified 2026-07-07)
+### multi-get comma-lists: FIXED upstream 2026-08-13 (was a doc-vs-code gap)
 
-The CLI and MCP comma-list branches are **two independent implementations with
-divergent semantics** (CLI: `src/cli/qmd.ts` `multiGet`, matches bare `d.path`;
-MCP/SDK: `src/store.ts` `findDocuments`, matches the reconstructed
-`qmd://collection/path` URI). Verified matrix:
+**All three multi-get defects we filed are now fixed in `main`** (merged in tobi's
+2026-08-13 spree, live-verified after the dev catch-up merge on 2026-08-13):
 
-| Pattern form | CLI comma-list | MCP `multi_get` |
-|---|---|---|
-| `docs/SYNTAX.md` (collection-relative) | ✅ | ✅ |
-| `qmd/docs/SYNTAX.md` (collection-prefixed) | ❌ "File not found" | ✅ |
-| `qmd://qmd/docs/SYNTAX.md` (full URI) | ✅ | ✅ |
-| `#abc123` (docid) | ❌ | ❌ |
-| `NTAX.md` (filename fragment) | ⚠️ silently matches SYNTAX.md | ⚠️ same |
+| Pattern form | CLI comma-list | MCP `multi_get` | Status |
+|---|---|---|---|
+| `docs/SYNTAX.md` (collection-relative) | ✅ | ✅ | always worked |
+| `qmd/docs/SYNTAX.md` (collection-prefixed) | ✅ | ✅ | **CLI fixed** (was ❌ "File not found") |
+| `qmd://qmd/docs/SYNTAX.md` (full URI) | ✅ | ✅ | always worked |
+| `#abc123` (docid) | ✅ | ✅ | **fixed** (was ❌ everywhere) |
 
-- **Docids fail everywhere in multi-get** despite CLAUDE.md and README
-  documenting `qmd multi-get "#abc123, #def456"`. Neither implementation has a
-  docid branch (`get` uses a separate `findDocumentByDocid` that multi-get never
-  touches). Single-docid patterns hit the glob branch and fail too.
-- **Suffix matching is an unanchored `LIKE '%name'`** — no path-separator
-  anchor, so a typo'd name can silently fetch the *wrong document* instead of
-  erroring (and the did-you-mean path never fires).
-- **Unprefixed names resolve globally with `LIMIT 1`, no `ORDER BY`** — which
-  collection wins is arbitrary (`README.md` → `tweet/README.md` here).
-- **Safe form: always use full `qmd://collection/path` URIs in comma-lists** —
-  the only pattern form that works in every branch of both implementations.
-  For docids, fall back to one `get` per docid.
-- Related parseability defect: multi-get's `--format files` prepends the docid
-  *inside* the first CSV field (`#1b5968 docs/SYNTAX.md,"context"`), so naive
-  comma-splitting mangles the first column. (`--format files` itself emitting
-  headerless `docid,score,path,"context"` CSV is by design and original
-  behavior — shipped in v0.9.0, the first published release.)
+- **#706 (docids) → PR #753 (@dpersek), merged.** `qmd multi-get "#dcbedc"` now
+  resolves. Live-verified 2026-08-13.
+- **#759 (CLI/MCP path divergence, unanchored suffix) → PR #868 (tobi,
+  "unify multi-get comma-list path resolution"), merged.** The two implementations
+  now share resolution; the collection-prefixed form resolves in the CLI.
+  Live-verified 2026-08-13. (I did not separately re-test the unanchored-suffix
+  silent-wrong-match edge; #868 unified the path so treat the old
+  `LIKE '%name'` warning as stale — re-check the source if it matters.)
+- **#760 (`--format files` docid inside field 1) → PR #846 (tobi), merged.**
+  Output is now `#1b5968,docs/SYNTAX.md,"context"` — docid is its own comma field.
+  Live-verified 2026-08-13. (Headerless `docid,score,path,"context"` CSV remains
+  by design, from v0.9.0.)
 
-Upstream status (2026-07-07): the docid gap was already filed as **#706** with a
-fix in review (**PR #753**, covers CLI + SDK + MCP with tests — if merged, the
-docid rows above flip to ✅). The path-matching divergence / unanchored-suffix /
-arbitrary-LIMIT-1 semantics are NOT covered by #753 (explicit non-goal) — we
-filed those as **#759**, and the `--format files` docid-in-first-field defect as
-**#760**. We also posted the matrix to the #706 thread and a scope-confirming
-comment on #753 (2026-07-07).
+Our two related plugin PRs also landed the same day: **#794→relanded as #832**
+(plugin version bump) and **#795→relanded as #831** (scope plugin to `./skills`),
+both crediting `Original author: @rymalia`; **#796→PR #864** (release-context.sh).
+Still no new release TAG — latest published is v2.5.3; all merged-but-unreleased.
 
 ## Agent Preferences
 
