@@ -1,6 +1,6 @@
 # QMD Local Environment -- OVERRIDES CLAUDE.md
 
-> **TL;DR — Install method:** `qmd` runs from **local source** (`/Users/rymalia/projects/qmd`) linked via `npm link`, **NOT** the published `@tobilu/qmd` npm package. Edits go live after `npm run build`. Details in [Current Install State](#current-install-state).
+> **TL;DR — Install method:** `qmd` runs from the **published `@tobilu/qmd` npm package** (`npm install -g`, currently **v2.8.3**), **NOT** from local source. The `/Users/rymalia/projects/qmd` git checkout is now for reference/dev only — edits there are NOT live until you re-link (`npm link` from the repo, which flips back to source mode). Details in [Current Install State](#current-install-state).
 
 **This file is authoritative for our local development environment.**
 **Where this file contradicts CLAUDE.md, THIS FILE WINS.** CLAUDE.md is the upstream
@@ -13,15 +13,18 @@ management instructions.
 
 > **UPDATE THIS SECTION whenever the install method, version, or binary path changes.**
 
-QMD is installed **from local source code**, NOT from the published npm package on npmjs.
+QMD is installed **from the published npm package** (`@tobilu/qmd` on npmjs), NOT from local source. **(Switched from source-mode `npm link` → published on 2026-08-21.)**
 
-- **Source**: `/Users/rymalia/projects/qmd` (git clone of `tobi/qmd` fork)
-- **Binary**: `/Users/rymalia/.nvm/versions/node/v24.18.0/bin/qmd` (via `npm link`)
-- **Symlink chain**: `~/.nvm/.../bin/qmd` -> `node_modules/@tobilu/qmd` -> `/Users/rymalia/projects/qmd`
-- **Runtime**: Node.js v24.18.0 (via nvm; upgraded from v24.12.0 ~2026-06-30 — the old nvm dir was removed, which broke the LaunchAgent's hardcoded path until it was repointed on 2026-07-07)
-- **Version**: v2.6.3 (source, `dev` branch). **Caught up to upstream/main `200bf98` on 2026-08-13** — merged tobi's big 2026-08-13 spree (49 files, ~6.8k insertions: multi-get fixes #753/#846/#868, mcp-pid, embed-lock, version.ts, release-context.sh, many new tests) into dev. The merge is **staged with `--no-commit`, awaiting the user's commit** (marketplace.json conflict resolved to upstream's `source: ./skills` + `version: 2.6.3` + `release` skill + mcpServers block; a local `./skills`/`0.1.4` experiment was stashed as superseded). After that commit, dev is ahead of the local `main` branch (still at old main) until main is fast-forwarded. Note v2.6.3 is upstream main's *unpublished* version: release PR #746 merged 2026-06-24 but was never tagged/published, so npm and GitHub releases still say v2.5.3 (this spree is also merged-but-unreleased).
+- **Package**: `@tobilu/qmd@2.8.3` — the published `latest` on npm as of 2026-08-21.
+- **Binary**: `/Users/rymalia/.nvm/versions/node/v24.18.0/bin/qmd` (symlink into the global install)
+- **Symlink chain**: `~/.nvm/.../bin/qmd` -> `~/.nvm/.../lib/node_modules/@tobilu/qmd/bin/qmd` (a **real installed file**, no longer a link into `projects/qmd`)
+- **Runtime**: Node.js v24.18.0 (via nvm). Daemon and CLI both run the **compiled `dist/cli/qmd.js` via node** — NOT tsx/`src` (that was source mode). `qmd doctor` reports `Runtime: better-sqlite3`.
+- **Install command used**: `npm install -g --allow-scripts=node-llama-cpp,tree-sitter-go,tree-sitter-python,tree-sitter-rust,tree-sitter-typescript,tree-sitter-javascript @tobilu/qmd` — the `--allow-scripts` flag is **required** in this environment because npm is configured to block install scripts by default, and `node-llama-cpp`'s postinstall (downloads the llama.cpp native binary for embeddings/rerank/query-expansion) plus the tree-sitter `node-gyp-build` steps must run or the LLM/AST-chunking layers break.
+- **The `projects/qmd` checkout is now decoupled.** It stays at `v2.6.3` on `dev` for reference/dev; editing it + `npm run build` does NOT affect the running `qmd` anymore. The daemon was restarted (LaunchAgent) onto the published dist and verified: `qmd doctor` fully clean, live `query` returned reranked results, MCP HTTP endpoint `HTTP 200`, existing index at `~/.cache/qmd/index.sqlite` (4,305 docs, fingerprint `c37385`) read without migration issues.
 
-Any change to source followed by `npm run build` is immediately live. No reinstall or re-link needed after the initial `npm link`.
+**To switch back to source mode** (hot-editable local build): `npm rm -g @tobilu/qmd` then from `/Users/rymalia/projects/qmd` run `npm run build && npm link`, then restart the daemon. After that, the source-mode procedures below (version cross-checks, quick rebuild, tsx runner) apply again. **While on the published install, the source-mode sections below (`Determining the current version`, `Update/Reinstall from Source`, `Quick Rebuild`, `Source mode note`) are NOT applicable** — `qmd --version` alone is authoritative, and there is no `src`/`dist` divergence to reconcile.
+
+To update the published install later: `npm install -g @tobilu/qmd@latest` (with the same `--allow-scripts` flag), then restart the daemon via `launchctl unload`/`load`.
 
 ### Determining the current version (REQUIRED procedure)
 
@@ -282,7 +285,7 @@ documents — `qmd query $'intent: ...\nlex: ...\nvec: ...'` — see docs/SYNTAX
 Our two related plugin PRs also landed the same day: **#794→relanded as #832**
 (plugin version bump) and **#795→relanded as #831** (scope plugin to `./skills`),
 both crediting `Original author: @rymalia`; **#796→PR #864** (release-context.sh).
-Still no new release TAG — latest published is v2.5.3; all merged-but-unreleased.
+
 
 ## Agent Preferences
 
