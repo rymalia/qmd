@@ -665,6 +665,23 @@ export function getRealPath(path: string): string {
   }
 }
 
+/**
+ * True if `target` is `dir` or a descendant, after resolving symlinks.
+ * Used to keep indexing and qmd:// filesystem resolution inside a collection.
+ */
+export function isPathInsideDir(dir: string, target: string): boolean {
+  const realDir = getRealPath(dir);
+  try {
+    return getRelativePathFromPrefix(realpathSync(target), realDir) !== null;
+  } catch {
+    // Unreadable or dangling: realpath fails. Compare lexically so a mode-0
+    // file inside the collection is not treated as an escape (macOS /var vs
+    // /private/var). Readable out-of-tree symlinks still hit the try path.
+    return getRelativePathFromPrefix(resolve(target), resolve(dir)) !== null;
+  }
+}
+
+
 // =============================================================================
 // Virtual Path Utilities (qmd://)
 // =============================================================================
@@ -769,7 +786,9 @@ export function resolveVirtualPath(db: Database, virtualPath: string): string | 
   const coll = getCollectionByName(db, parsed.collectionName);
   if (!coll) return null;
 
-  return resolve(coll.pwd, parsed.path);
+  const resolved = resolve(coll.pwd, parsed.path);
+  if (!isPathInsideDir(coll.pwd, resolved)) return null;
+  return resolved;
 }
 
 /**
@@ -956,13 +975,61 @@ function applyFtsSyncTriggers(db: Database): void {
  * then runs `DELETE FROM documents_fts`, which FTS5 compiles against the
  * external content table as `SELECT T.name FROM documents AS T` — documents
  * has no `name` column, so open throws `no such column: T.name` (#792).
+ *
+ * sqlite_master.sql is the usual signal, but PRAGMA table_info is the live
+ * virtual-table schema: a leftover `name` column with no `filepath` is never
+ * current, even if CREATE IF NOT EXISTS rewrote the sql text.
  */
+function documentsFtsColumnNames(db: Database): string[] {
+  try {
+    const cols = db.prepare(`PRAGMA table_info(documents_fts)`).all() as { name?: string }[];
+    return cols.map(c => (c.name ?? "").toLowerCase()).filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
 function documentsFtsSchemaIsCurrent(db: Database): boolean {
   const row = db.prepare(
     `SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'documents_fts'`
   ).get() as { sql?: string } | undefined | null;
   const sql = (row?.sql ?? "").toLowerCase().replace(/\s+/g, "");
-  return sql.includes("filepath") && sql.includes("title") && !sql.includes("content=");
+  if (!sql.includes("filepath") || !sql.includes("title") || sql.includes("content=")) {
+    return false;
+  }
+  const names = new Set(documentsFtsColumnNames(db));
+  return names.has("filepath") && names.has("title") && names.has("body") && !names.has("name");
+}
+
+function isAlreadyExistsError(err: unknown): boolean {
+  return /already exists/i.test(getErrorMessage(err));
+}
+
+function documentsFtsExists(db: Database): boolean {
+  const row = db.prepare(
+    `SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'documents_fts'`
+  ).get() as { name?: string } | undefined | null;
+  return Boolean(row?.name);
+}
+
+// FTS5 CREATE VIRTUAL TABLE IF NOT EXISTS is not atomic across WAL connections.
+// Two first-open processes can both observe a missing table on their schema
+// snapshot; the loser then throws `table documents_fts already exists`
+// (Bun/macOS CI). IF NOT EXISTS still helps the uncontended path, and a
+// concurrent "already exists" is treated as success when the table is present.
+const DOCUMENTS_FTS_DDL = `
+  CREATE VIRTUAL TABLE IF NOT EXISTS documents_fts USING fts5(
+    filepath, title, body,
+    tokenize='porter unicode61'
+  )
+`;
+
+function createDocumentsFtsTable(db: Database): void {
+  try {
+    db.exec(DOCUMENTS_FTS_DDL);
+  } catch (err) {
+    if (!isAlreadyExistsError(err) || !documentsFtsExists(db)) throw err;
+  }
 }
 
 function recreateDocumentsFts(db: Database): void {
@@ -970,23 +1037,35 @@ function recreateDocumentsFts(db: Database): void {
   db.exec(`DROP TRIGGER IF EXISTS documents_ad`);
   db.exec(`DROP TRIGGER IF EXISTS documents_au`);
   db.exec(`DROP TABLE IF EXISTS documents_fts`);
-  db.exec(`
-    CREATE VIRTUAL TABLE documents_fts USING fts5(
-      filepath, title, body,
-      tokenize='porter unicode61'
-    )
-  `);
+  createDocumentsFtsTable(db);
   db.exec(`DELETE FROM store_config WHERE key = 'fts_cjk_normalized_version'`);
 }
 
+// Missing-table create and legacy-schema repair share one IMMEDIATE
+// transaction with a double-checked read, matching applyFtsSyncTriggers:
+// the DROP+CREATE (or first CREATE) is atomic across connections, and
+// losers skip once any process has published the current table.
 function ensureDocumentsFtsSchema(db: Database): void {
   if (documentsFtsSchemaIsCurrent(db)) return;
-  recreateDocumentsFts(db);
-  // recreateDocumentsFts dropped the sync triggers. applyFtsSyncTriggers
-  // only reinstalls them when user_version is stale, so a DB that already
-  // has the current user_version would otherwise be left untriggered.
-  if (getUserVersion(db) >= STORE_SCHEMA_VERSION) {
-    installFtsSyncTriggers(db);
+  db.exec(`BEGIN IMMEDIATE`);
+  try {
+    if (!documentsFtsSchemaIsCurrent(db)) {
+      if (documentsFtsExists(db)) {
+        recreateDocumentsFts(db);
+        // recreateDocumentsFts dropped the sync triggers. applyFtsSyncTriggers
+        // only reinstalls them when user_version is stale, so a DB that already
+        // has the current user_version would otherwise be left untriggered.
+        if (getUserVersion(db) >= STORE_SCHEMA_VERSION) {
+          installFtsSyncTriggers(db);
+        }
+      } else {
+        createDocumentsFtsTable(db);
+      }
+    }
+    db.exec(`COMMIT`);
+  } catch (err) {
+    db.exec(`ROLLBACK`);
+    throw err;
   }
 }
 
@@ -1004,6 +1083,11 @@ function dropTableIfExists(db: Database, tableName: string): void {
 }
 
 function rebuildFTSForCjkNormalization(db: Database): void {
+  // Repair leftover content-external FTS *before* the version check or the
+  // later `DELETE FROM documents_fts`. A stamped CJK version with a legacy
+  // `name` column would otherwise skip the rebuild, and DELETE still compiles
+  // as SELECT T.name FROM documents (#792).
+  ensureDocumentsFtsSchema(db);
   if (cjkRebuildVersion(db) === FTS_CJK_NORMALIZED_VERSION) return;
 
   // Clean up the legacy fixed-name shadow table left by an interrupted older
@@ -1189,14 +1273,9 @@ function initializeDatabase(db: Database): void {
     )
   `);
 
-  // FTS - index filepath (collection/path), title, and content
-  db.exec(`
-    CREATE VIRTUAL TABLE IF NOT EXISTS documents_fts USING fts5(
-      filepath, title, body,
-      tokenize='porter unicode61'
-    )
-  `);
-
+  // FTS - index filepath (collection/path), title, and content.
+  // Do not CREATE VIRTUAL TABLE here as an autocommit statement: FTS5
+  // IF NOT EXISTS races under WAL (see createDocumentsFtsTable).
   ensureDocumentsFtsSchema(db);
   applyFtsSyncTriggers(db);
 
@@ -1568,6 +1647,15 @@ export async function reindexCollection(
     // reconstructed as: resolve(collection.path, storedPath).
     // handelize() is NOT applied at index time — it is display-only.
     const path = normalizePathSeparators(relativeFile);
+    // Glob `../` segments, absolute patterns, and file symlinks can resolve
+    // outside the collection root. Do not ingest those files, and do not mark
+    // them seen so a previous escaped row is deactivated on this pass.
+    if (!isPathInsideDir(collectionPath, filepath)) {
+      processed++;
+      skippedFiles.push({ file: relativeFile, code: "OUTSIDE_COLLECTION" });
+      options?.onProgress?.({ file: relativeFile, current: processed, total });
+      continue;
+    }
     seenPaths.add(path);
 
     let content: string;
@@ -2548,7 +2636,14 @@ export function getIndexHealth(db: Database, model: string = DEFAULT_EMBED_MODEL
 // Caching
 // =============================================================================
 
-export function getCacheKey(url: string, body: object): string {
+export type CacheKeyBody = {
+  query?: string;
+  model?: string;
+  chunk?: string;
+  file?: string;
+};
+
+export function getCacheKey(url: string, body: CacheKeyBody): string {
   const hash = createHash("sha256");
   hash.update(url);
   hash.update(JSON.stringify(body));

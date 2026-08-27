@@ -2,7 +2,67 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added Oxlint lint fence.
+
+## [2.8.3] - 2026-08-16
+
+### Security
+
+- `qmd update` no longer runs a project-local `.qmd/index.yml`'s `update:`
+  commands without approval (#886). That file arrives with a `git clone` and is
+  adopted automatically for any command run inside the tree, so cloning a
+  repository and running `qmd update` executed shell commands chosen by whoever
+  wrote it. On a terminal QMD now lists the commands and asks; with nobody to
+  ask it skips them and keeps indexing. Approvals are recorded per config file
+  and per command set in `<config dir>/trusted.json`, so editing a command — or
+  a `git pull` that rewrites one — asks again. New `qmd trust`,
+  `qmd trust list` and `qmd trust revoke` manage approvals, and
+  `QMD_TRUST_UPDATE_HOOKS=1` opts unattended runs back in. Commands in your own
+  `~/.config/qmd/*.yml`, including anything `qmd collection update-cmd` writes,
+  are unaffected.
+
+- The same project-local trust gate now covers collection `path` values that
+  resolve outside the project and non-default `models.embed` / `models.rerank`
+  / `models.generate` URIs (#889). In-project paths still index unattended;
+  out-of-project directories are skipped until `qmd trust`, and custom model
+  URIs are not loaded or downloaded. `QMD_TRUST_LOCAL_CONFIG=1` opts unattended
+  runs back in (and `QMD_TRUST_UPDATE_HOOKS=1` still does). `qmd collection
+  add` records trust as it writes, the same way `update-cmd` does.
+
+- Indexing no longer follows file symlinks or glob `../` / absolute patterns
+  out of the collection directory. `fast-glob` already skipped symlinked
+  directories, but a file symlink (or a mask like `../**/*.md`) still resolved
+  via `realpath` and ingested the target. `qmd://` filesystem resolution uses
+  the same containment check, so `qmd://collection/../../../etc/passwd` no
+  longer produces a path outside the collection.
+
+- `qmd mcp --http` now validates the `Origin` and `Host` headers on every
+  request and answers `403` when they name anything but a loopback address
+  (#881). Binding to localhost is no defence against the user's own browser:
+  a page can re-point its hostname at `127.0.0.1` (DNS rebinding) and read
+  the indexed corpus through `POST /query` or `POST /mcp`. Requests with no
+  `Origin` (curl, MCP clients, editors) are unaffected. Extend the allowlists
+  with `QMD_ALLOWED_ORIGINS` / `QMD_ALLOWED_HOSTS`, or set
+  `QMD_ALLOWED_ORIGINS=*` behind your own authenticating proxy. A wildcard
+  bind (`--host 0.0.0.0`) skips the host check and warns at startup.
+
 ### Changed
+
+- Dependencies: `node-llama-cpp` 3.18.1 → **3.20.0** (llama.cpp b8390 → b10361, 2026-08-11). Also safe patch/minors: `picomatch` 4.0.4 → 4.0.5, `web-tree-sitter` 0.26.8 → 0.26.12, `tsx` 4.21.0 → 4.23.12, `vitest` 3.2.4 → 3.2.7. No zod/vitest major; `@modelcontextprotocol/server` stays 2.0.0 (no 2.x patch). `flake.nix` FOD hashes are not updated here.
+- `generate` and query expansion now await `LlamaContextSequence.dispose()` before disposing the parent context. node-llama-cpp 3.20 made sequence dispose async; the library's context-onDispose path does not wait.
+
+- MCP server now speaks protocol revision **2026-07-28** via the official
+  TypeScript SDK 2.x (`@modelcontextprotocol/server`). HTTP is sessionless
+  (no `Mcp-Session-Id`, no initialize handshake, no idle-session TTL / #816
+  reaper). Clients send version and capabilities in `_meta`; `server/discover`
+  is implemented; Streamable HTTP POST requires `Mcp-Method` / `Mcp-Name`
+  (mismatch → `-32020`); `tools/list` is deterministic and carries `ttlMs` /
+  `cacheScope`. 2025-era stdio clients still work (`serveStdio` dual-speak);
+  2025-era HTTP `initialize` is answered per-request without minting a
+  session. Existing tools (`query` / `get` / `multi_get` / `status`), stdio
+  EOF shutdown, and named-index daemon PIDs are unchanged. No release.
 
 - `qmd pull` (and implicit model downloads in `embed`/`query`) no longer print
   node-llama-cpp's download progress bar. The bar redraws every few kilobytes
@@ -26,6 +86,26 @@
   runs and formats.
 
 ### Fixed
+
+- Concurrent first-open of a cold index no longer fails with
+  `table documents_fts already exists` on Bun/macOS. FTS5
+  `CREATE VIRTUAL TABLE IF NOT EXISTS` is not atomic across WAL
+  connections: two processes can both see a missing table on their
+  schema snapshot and the loser throws. Table create and legacy-schema
+  repair now use the same `BEGIN IMMEDIATE` + double-check as the FTS
+  sync triggers, and treat a concurrent "already exists" as success
+  when the table is present.
+
+- Nix flake `qmd-node-modules` FOD hashes updated for x86_64-linux and
+  aarch64-darwin after the MCP SDK 2.0 bump. `nix build` / Nix GHA was
+  failing with a fixed-output hash mismatch.
+
+- CJK FTS rebuild no longer skips leftover `fts5(name, body, content='documents')`
+  tables when `fts_cjk_normalized_version` is already stamped, and schema
+  repair now checks live FTS columns (`PRAGMA table_info`) as well as
+  `sqlite_master.sql`. The MCP HTTP test helper still seeds that legacy
+  table; `startMcpHttpServer` / `createStore` on it must not throw
+  `no such column: T.name` (#792 regression).
 
 - `qmd collection add --glob` is no longer silently ignored. parseArgs ran
   with `strict: false`, so OpenClaw's `--glob memory.md` (and any other
