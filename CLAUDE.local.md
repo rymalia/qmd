@@ -16,9 +16,9 @@ management instructions.
 QMD is installed **from the published npm package** (`@tobilu/qmd` on npmjs), NOT from local source. **(Switched from source-mode `npm link` → published on 2026-08-21.)**
 
 - **Package**: `@tobilu/qmd@2.8.3` — the published `latest` on npm as of 2026-08-21.
-- **Binary**: `/Users/rymalia/.nvm/versions/node/v24.18.0/bin/qmd` (symlink into the global install)
+- **Binary**: `/Users/rymalia/.nvm/versions/node/v24.22.1/bin/qmd` (symlink into the global install)
 - **Symlink chain**: `~/.nvm/.../bin/qmd` -> `~/.nvm/.../lib/node_modules/@tobilu/qmd/bin/qmd` (a **real installed file**, no longer a link into `projects/qmd`)
-- **Runtime**: Node.js v24.18.0 (via nvm). Daemon and CLI both run the **compiled `dist/cli/qmd.js` via node** — NOT tsx/`src` (that was source mode). `qmd doctor` reports `Runtime: better-sqlite3`.
+- **Runtime**: Node.js v24.22.1 (via nvm; moved from v24.18.0 on 2026-10-23 for the Black October fixes, and the LaunchAgent plist was repointed to match). Daemon and CLI both run the **compiled `dist/cli/qmd.js` via node** — NOT tsx/`src` (that was source mode). `qmd doctor` reports `Runtime: better-sqlite3`.
 - **Install command used**: `npm install -g --allow-scripts=node-llama-cpp,tree-sitter-go,tree-sitter-python,tree-sitter-rust,tree-sitter-typescript,tree-sitter-javascript @tobilu/qmd` — the `--allow-scripts` flag is **required** in this environment because npm is configured to block install scripts by default, and `node-llama-cpp`'s postinstall (downloads the llama.cpp native binary for embeddings/rerank/query-expansion) plus the tree-sitter `node-gyp-build` steps must run or the LLM/AST-chunking layers break.
 - **The `projects/qmd` checkout is now decoupled.** It stays at `v2.6.3` on `dev` for reference/dev; editing it + `npm run build` does NOT affect the running `qmd` anymore. The daemon was restarted (LaunchAgent) onto the published dist and verified: `qmd doctor` fully clean, live `query` returned reranked results, MCP HTTP endpoint `HTTP 200`, existing index at `~/.cache/qmd/index.sqlite` (4,305 docs, fingerprint `c37385`) read without migration issues.
 
