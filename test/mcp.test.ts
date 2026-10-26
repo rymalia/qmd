@@ -13,6 +13,7 @@ import { unlinkSync } from "node:fs";
 import { mkdtemp, writeFile, readdir, unlink, rmdir } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { request as httpRequest } from "node:http";
 import YAML from "yaml";
 import type { CollectionConfig } from "../src/collections.js";
 import { setConfigIndexName } from "../src/collections.js";
@@ -1465,6 +1466,120 @@ describe("MCP HTTP Transport — 2026-07-28 protocol", () => {
     expect(res.headers.get("mcp-session-id")).toBeNull();
   });
 
+  test("HTTP request bodies are capped at 1 MiB on REST and /mcp", async () => {
+    const bodyWithEmptyPadding = JSON.stringify({
+      searches: [{ type: "lex", query: "readme" }],
+      rerank: false,
+      padding: "",
+    });
+    const justUnderLimit = JSON.stringify({
+      searches: [{ type: "lex", query: "readme" }],
+      rerank: false,
+      padding: "x".repeat(1024 * 1024 - Buffer.byteLength(bodyWithEmptyPadding) - 1),
+    });
+    expect(Buffer.byteLength(justUnderLimit)).toBe(1024 * 1024 - 1);
+
+    const underLimit = await fetch(`${baseUrl}/query`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: justUnderLimit,
+    });
+    expect(underLimit.status).toBe(200);
+
+    const overLimitBody = JSON.stringify({ padding: "x".repeat(1024 * 1024) });
+    const restOverLimit = await fetch(`${baseUrl}/query`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: overLimitBody,
+    });
+    expect(restOverLimit.status).toBe(413);
+    expect(await restOverLimit.json()).toEqual({ error: "Request body too large" });
+
+    const mcpOverLimit = await fetch(`${baseUrl}/mcp`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Accept": "application/json, text/event-stream",
+        "MCP-Protocol-Version": MCP_2026,
+        "Mcp-Method": "tools/list",
+      },
+      body: overLimitBody,
+    });
+    expect(mcpOverLimit.status).toBe(413);
+    expect(await mcpOverLimit.json()).toEqual({
+      jsonrpc: "2.0",
+      error: { code: -32700, message: "Parse error: Request body too large" },
+      id: null,
+    });
+  });
+
+  // fetch() always sends Content-Length for a string body, so the test above
+  // only reaches the up-front header check. A chunked upload has no length,
+  // which leaves the per-chunk count as the only guard.
+  test("a chunked body with no Content-Length is capped while streaming", async () => {
+    const postChunked = (pathname: string, headers: Record<string, string> = {}) =>
+      new Promise<{ status: number; body: string }>((resolve, reject) => {
+        const req = httpRequest(`${baseUrl}${pathname}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "Transfer-Encoding": "chunked", ...headers },
+        }, (res) => {
+          let body = "";
+          res.setEncoding("utf8");
+          res.on("data", (chunk) => { body += chunk; });
+          res.on("end", () => resolve({ status: res.statusCode ?? 0, body }));
+        });
+        req.on("error", reject);
+        const chunk = "x".repeat(64 * 1024);
+        for (let i = 0; i < 20; i++) req.write(chunk);
+        req.end();
+      });
+
+    const rest = await postChunked("/query");
+    expect(rest.status).toBe(413);
+    expect(JSON.parse(rest.body)).toEqual({ error: "Request body too large" });
+
+    const mcp = await postChunked("/mcp", {
+      "Accept": "application/json, text/event-stream",
+      "MCP-Protocol-Version": MCP_2026,
+      "Mcp-Method": "tools/list",
+    });
+    expect(mcp.status).toBe(413);
+    expect(JSON.parse(mcp.body)).toEqual({
+      jsonrpc: "2.0",
+      error: { code: -32700, message: "Parse error: Request body too large" },
+      id: null,
+    });
+  });
+
+  test("REST rejects over-cap searches and collections", async () => {
+    const tooManySearches = Array.from({ length: 11 }, () => ({ type: "lex", query: "readme" }));
+    const tooManySearchesResponse = await fetch(`${baseUrl}/query`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ searches: tooManySearches }),
+    });
+    expect(tooManySearchesResponse.status).toBe(400);
+    expect(await tooManySearchesResponse.json()).toEqual({
+      error: "Invalid field: searches (maximum 10 items)",
+    });
+
+    const tooManyCollections = Array.from({ length: 1001 }, (_, index) => `collection-${index}`);
+    for (const [pathname, body] of [
+      ["/query", { searches: [{ type: "lex", query: "readme" }], collections: tooManyCollections }],
+      ["/metadata", { collections: tooManyCollections }],
+    ] as const) {
+      const response = await fetch(`${baseUrl}${pathname}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      expect(response.status).toBe(400);
+      expect(await response.json()).toEqual({
+        error: "Invalid field: collections (maximum 1000 items)",
+      });
+    }
+  });
+
   test("query chunkStrategy selects different code passages", async () => {
     const query = async (chunkStrategy: "auto" | "regex") => {
       const { status, json } = await postMcp(
@@ -1501,6 +1616,33 @@ describe("MCP HTTP Transport — 2026-07-28 protocol", () => {
     expect(regex.snippet).not.toContain("beta_");
     expect(auto.snippet).toContain("beta_");
     expect(auto.snippet).toContain("gamma_");
+  });
+
+  test("MCP query rejects over-cap collections", async () => {
+    const tooManyCollections = Array.from({ length: 1001 }, (_, index) => `collection-${index}`);
+    const { status, json } = await postMcp(
+      {
+        jsonrpc: "2.0",
+        id: 8,
+        method: "tools/call",
+        params: {
+          name: "query",
+          arguments: {
+            searches: [{ type: "lex", query: "readme" }],
+            collections: tooManyCollections,
+          },
+          _meta: mcp2026Meta,
+        },
+      },
+      {
+        "MCP-Protocol-Version": MCP_2026,
+        "Mcp-Method": "tools/call",
+        "Mcp-Name": "query",
+      },
+    );
+    expect(status).toBe(200);
+    expect(json.result.isError).toBe(true);
+    expect(json.result.content[0].text).toContain("Input validation error");
   });
 
   test("POST /query and /search accept and validate chunkStrategy", async () => {

@@ -4,6 +4,13 @@
 
 ### Fixed
 
+- The HTTP server bounds the memory a single request can use. Request bodies
+  over 1 MiB get a 413 on `/mcp`, `/query`, `/search` and `/metadata`, checked
+  while the body streams in (including chunked uploads with no
+  `Content-Length`). A request may name at most 1000 collections (MCP `query`
+  and `metadata`, REST `/query`, `/search` and `/metadata`), and REST `/query`
+  and `/search` take at most 10 `searches`, the limit MCP already applied.
+  Over-limit arrays get a 400 on REST and an input validation error on MCP.
 - `qmd doctor` selects vector sample identities before loading document bodies,
   avoiding excessive SQLite memory use on large indexes with duplicate paths.
   #978 (thanks @naveenspark)

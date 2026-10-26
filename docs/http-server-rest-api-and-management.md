@@ -81,15 +81,18 @@ curl -s http://localhost:8181/query \
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `searches` | array | *(required)* | Array of `{type, query}` objects. Types: `lex`, `vec`, `hyde` |
-| `collections` | string[] | default-included collections | Restrict to specific collections. If omitted, the server uses the configured default-included collections; if that list is empty, search falls back to all collections. |
+| `searches` | array | *(required)* | Array of 1–10 `{type, query}` objects. Types: `lex`, `vec`, `hyde` |
+| `collections` | string[] | default-included collections | Restrict to specific collections (up to 1000). If omitted, the server uses the configured default-included collections; if that list is empty, search falls back to all collections. |
 | `limit` | number | 10 | Max results to return |
 | `minScore` | number | 0 | Minimum relevance threshold (0.0–1.0) |
 | `candidateLimit` | number | store default | Max candidates to rerank |
 | `intent` | string | *(none)* | Disambiguation context for query expansion, reranking, and snippet extraction |
 | `rerank` | boolean | store default | Enable or disable LLM reranking |
+| `chunkStrategy` | `"auto"` \| `"regex"` | `regex` | Passage chunking for selection and reranking; use `auto` for AST-aware code boundaries |
 
 **Response:** `{"results": [{docid, file, title, score, context, line, snippet}, ...]}`
+
+Request bodies over 1 MiB get HTTP 413 `{"error": "Request body too large"}`. An over-limit `searches` or `collections` array, or an invalid `chunkStrategy`, gets HTTP 400 with an `{"error": "Invalid field: ..."}` message.
 
 ## MCP Server Management
 
